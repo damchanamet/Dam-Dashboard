@@ -1595,17 +1595,17 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Push to cloud immediately when user switches app / closes tab ────────────
 // On iOS Safari, setTimeout is frozen when app is backgrounded, so the normal
 // 3-second debounce never fires. visibilitychange + pagehide both catch this.
+// Push ทันทีเมื่อ user switch app หรือปิด tab
+// ใช้ _cloudDirty แทน _cloudTimer — ครอบคลุมกรณีที่ timer ยิงไปแล้วแต่ push ยังไม่สำเร็จ
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && _cloudEnabled() && _cloudTimer) {
-        clearTimeout(_cloudTimer);
-        _cloudTimer = null;
-        _cloudPush(); // fire immediately instead of waiting
+    if (document.visibilityState === 'hidden' && _cloudEnabled() && _cloudDirty) {
+        if (_cloudTimer) { clearTimeout(_cloudTimer); _cloudTimer = null; }
+        _cloudPush();
     }
 });
 window.addEventListener('pagehide', () => {
-    if (_cloudEnabled() && _cloudTimer) {
-        clearTimeout(_cloudTimer);
-        _cloudTimer = null;
+    if (_cloudEnabled() && _cloudDirty) {
+        if (_cloudTimer) { clearTimeout(_cloudTimer); _cloudTimer = null; }
         _cloudPush();
     }
 });
@@ -1748,6 +1748,7 @@ function save() {
 let _cloudTimer   = null;
 let _cloudSyncing = false;
 let _cloudError   = false;
+let _cloudDirty   = false;  // มีการแก้ข้อมูลที่ยังไม่ได้ push
 
 function _cloudCfg() {
     return { key: localStorage.getItem('jb_key') || '', id: localStorage.getItem('jb_id') || '' };
@@ -1795,6 +1796,7 @@ async function cloudLoad() {
 async function _cloudPush() {
     const { key, id } = _cloudCfg();
     if (!key || !id) return;
+    _cloudTimer = null;  // reset timer ทุกครั้งที่ push จริง
     _cloudSyncing = true; _cloudError = false;
     _updateCloudUI();
     try {
@@ -1805,15 +1807,26 @@ async function _cloudPush() {
         });
         _cloudSyncing = false;
         _cloudError = !res.ok;
-        if (res.ok) localStorage.setItem('jb_lastSync', new Date().toISOString());
-    } catch(e) { _cloudSyncing = false; _cloudError = true; }
+        if (res.ok) {
+            _cloudDirty = false;  // push สำเร็จ ล้าง dirty flag
+            localStorage.setItem('jb_lastSync', new Date().toISOString());
+        } else {
+            // Push ล้มเหลว → retry อีก 5 วิ
+            setTimeout(_cloudPush, 5000);
+        }
+    } catch(e) {
+        _cloudSyncing = false; _cloudError = true;
+        // Network error → retry อีก 8 วิ
+        setTimeout(_cloudPush, 8000);
+    }
     _updateCloudUI();
 }
 
 function cloudSave() {
     if (!_cloudEnabled()) return;
+    _cloudDirty = true;
     if (_cloudTimer) clearTimeout(_cloudTimer);
-    _cloudTimer = setTimeout(_cloudPush, 3000); // debounce 3 sec
+    _cloudTimer = setTimeout(_cloudPush, 800); // ลด debounce 3s → 0.8s
 }
 
 function cloudSyncNowBtn() { _cloudPush(); }

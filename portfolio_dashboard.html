@@ -1592,15 +1592,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (b) b.style.display = 'none';
 });
 
-// ── Push to cloud immediately when user switches app / closes tab ────────────
-// On iOS Safari, setTimeout is frozen when app is backgrounded, so the normal
-// 3-second debounce never fires. visibilitychange + pagehide both catch this.
-// Push ทันทีเมื่อ user switch app หรือปิด tab
-// ใช้ _cloudDirty แทน _cloudTimer — ครอบคลุมกรณีที่ timer ยิงไปแล้วแต่ push ยังไม่สำเร็จ
+// ── Push/Pull on visibility change ───────────────────────────────────────────
+// Hidden: push immediately (covers iOS backgrounding where setTimeout freezes)
+// Visible: pull from cloud if there's newer data from another device
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && _cloudEnabled() && _cloudDirty) {
-        if (_cloudTimer) { clearTimeout(_cloudTimer); _cloudTimer = null; }
-        _cloudPush();
+    if (!_cloudEnabled()) return;
+    if (document.visibilityState === 'hidden') {
+        // Push pending changes immediately before iOS freezes JS
+        if (_cloudDirty) {
+            if (_cloudTimer) { clearTimeout(_cloudTimer); _cloudTimer = null; }
+            _cloudPush();
+        }
+    } else if (document.visibilityState === 'visible') {
+        // Pull latest cloud data — another device may have edited while we were away
+        // Only if we have no pending local changes (to avoid overwriting in-progress edits)
+        if (!_cloudDirty && !_cloudSyncing) {
+            _cloudPullIfNewer();
+        }
     }
 });
 window.addEventListener('pagehide', () => {
@@ -1609,6 +1617,19 @@ window.addEventListener('pagehide', () => {
         _cloudPush();
     }
 });
+
+// Periodic background pull — keeps Mac/iPad in sync even when tab stays open
+// Runs every 2 minutes; skips if we have pending local edits
+let _cloudPullTimer = null;
+function _schedulePullCheck() {
+    if (_cloudPullTimer) clearTimeout(_cloudPullTimer);
+    _cloudPullTimer = setTimeout(async () => {
+        if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing && document.visibilityState !== 'hidden') {
+            await _cloudPullIfNewer();
+        }
+        _schedulePullCheck(); // reschedule
+    }, 2 * 60 * 1000); // every 2 minutes
+}
 
 // FX rates: THB per 1 unit of foreign currency (e.g. fxRates.USD = 35.5 → 1 USD = ฿35.5)
 let fxRates = { THB: 1 };
@@ -1732,10 +1753,13 @@ async function init() {
     if (_cloudEnabled()) {
         const loaded = await cloudLoad();
         if (loaded) renderAll();
+        _schedulePullCheck(); // start periodic pull to stay in sync with other devices
     }
 }
 
 function save() {
+    // Stamp every save with a timestamp for conflict detection across devices
+    S._lastModified = Date.now();
     // Persist latest FX rates so client_dashboard can use the real rate
     if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
     localStorage.setItem('pfdata', JSON.stringify(S));
@@ -1790,6 +1814,38 @@ async function cloudLoad() {
             return true;
         }
     } catch(e) { console.warn('Cloud load failed', e); }
+    return false;
+}
+
+// Pull from cloud only if cloud data is newer than local — avoids overwriting edits
+async function _cloudPullIfNewer() {
+    const { key, id } = _cloudCfg();
+    if (!key || !id) return false;
+    try {
+        const res = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
+            headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
+            signal: AbortSignal.timeout(7000)
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        if (data && data.portfolios) {
+            const cloudTs = data._lastModified || 0;
+            const localTs = S._lastModified   || 0;
+            if (cloudTs > localTs) {
+                // Cloud has newer data (edited on another device) — pull it
+                S = data;
+                S.portfolios  = S.portfolios  || [];
+                S.holdings    = S.holdings    || [];
+                S.liabilities = S.liabilities || [];
+                S.snapshots   = S.snapshots   || [];
+                _syncVCFromS();
+                localStorage.setItem('pfdata', JSON.stringify(S));
+                localStorage.setItem('jb_lastSync', new Date().toISOString());
+                renderAll();
+                return true;
+            }
+        }
+    } catch(e) { /* silent — best-effort pull */ }
     return false;
 }
 
@@ -3528,7 +3584,7 @@ function confirmVesting() {
         if (existing) {
             existing.qty = (parseFloat(existing.qty) || 0) + shares;
         } else {
-            S.holdings.push({ id: 'vest_' + Date.now(), portfolioId: portId, type: 'stock', symbol: sym, qty: shares, price: strike, currentPrice: strike, currency: cur, exchange: 'MANUAL', name: sym });
+            S.holdings.push({ id: 'vest_' + Date.now(), portfolioId: portId, type: 'stock', symbol: sym, qty: shares, price: strike, currentPrice: strike, currency: cur, exchange: 'AUTO', name: sym });
         }
         // Deduct cash
         const cashH = S.holdings.find(x => x.portfolioId === portId && x.type === 'cash' && (x.currency || 'USD').toUpperCase() === cur.toUpperCase());
@@ -3624,7 +3680,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
 
                 let statusCol, statusLabel, mainPct, mainLabel;
                 if (koTriggered) {
-                    statusCol = '#ef4444'; statusLabel = '🚨 KO TRIGGERED';
+                    statusCol = '#8b5cf6'; statusLabel = '🚨 KO TRIGGERED';
                     mainPct = distFromKO.toFixed(1) + '%'; mainLabel = 'เกิน KO แล้ว';
                 } else if (nearKO) {
                     statusCol = '#f59e0b'; statusLabel = '⚡ NEAR KO';
@@ -3675,7 +3731,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
 
                 let statusCol, statusLabel, mainPct, mainLabel;
                 if (koTriggered) {
-                    statusCol = '#ef4444'; statusLabel = '🚨 KO TRIGGERED';
+                    statusCol = '#8b5cf6'; statusLabel = '🚨 KO TRIGGERED';
                     mainPct = Math.abs(distFromKO).toFixed(1) + '%'; mainLabel = 'ต่ำกว่า KO แล้ว';
                 } else if (nearKO) {
                     statusCol = '#f59e0b'; statusLabel = '⚡ NEAR KO';
@@ -5486,8 +5542,10 @@ function promptManualPrice(event, ids, symbol, currency) {
     const cur = currency && currency !== 'AUTO' ? currency : 'USD';
     // Find current manual price (from first id)
     const existing = S.holdings.find(h => h.id === ids[0]);
+    const isExchangeManual = existing?.exchange === 'MANUAL';
     const current = existing?.manualPrice ? existing.manualPrice : (existing?.currentPrice || '');
-    const input = prompt(`ใส่ราคา ${symbol} (${cur}) ด้วยตัวเอง:\n(เว้นว่างเพื่อล้างค่า manual และกลับไปดึงอัตโนมัติ)`, current || '');
+    const note = isExchangeManual ? '\n⚠️ หมายเหตุ: หุ้นนี้อยู่ใน mode MANUAL (ไม่ดึงอัตโนมัติ)\nเว้นว่างเพื่อล้างค่าและเปลี่ยนเป็น Auto-fetch' : '\n(เว้นว่างเพื่อล้างค่า manual และกลับไปดึงอัตโนมัติ)';
+    const input = prompt(`ใส่ราคา ${symbol} (${cur}) ด้วยตัวเอง:${note}`, current || '');
     if (input === null) return; // cancelled
     const val = parseFloat(input.trim());
     ids.forEach(id => {
@@ -5496,6 +5554,10 @@ function promptManualPrice(event, ids, symbol, currency) {
         if (!input.trim() || isNaN(val)) {
             // Clear manual price — go back to auto fetch
             delete S.holdings[idx].manualPrice;
+            // Also reset exchange from MANUAL to AUTO for stock types so auto-fetch works
+            if (S.holdings[idx].exchange === 'MANUAL' && S.holdings[idx].type === 'stock') {
+                S.holdings[idx].exchange = 'AUTO';
+            }
         } else {
             S.holdings[idx].manualPrice   = val;
             S.holdings[idx].currentPrice  = val;

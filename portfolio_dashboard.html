@@ -847,6 +847,25 @@ body {
     </div>
 
     <div class="settings-section">
+        <div class="settings-section-title">PIN ลูกค้า (Client Dashboard)</div>
+        <div class="card">
+            <div style="font-size:12px;color:var(--text-muted);padding:10px 0 12px;border-bottom:1px solid var(--border)">PIN จะเก็บเป็น hash ใน Cloud — ไม่มี plain text ในโค้ด</div>
+            <div class="settings-row">
+                <div><div class="settings-row-label">🌿 Dew</div><div class="settings-row-sub" id="pinStatusDew">—</div></div>
+                <button class="badge" onclick="openSetPin('dew','Dew','🌿')">ตั้ง PIN</button>
+            </div>
+            <div class="settings-row">
+                <div><div class="settings-row-label">🏦 Dike</div><div class="settings-row-sub" id="pinStatusDike">—</div></div>
+                <button class="badge" onclick="openSetPin('dike','Dike','🏦')">ตั้ง PIN</button>
+            </div>
+            <div class="settings-row" style="border-bottom:none">
+                <div><div class="settings-row-label">💼 Big</div><div class="settings-row-sub" id="pinStatusBig">—</div></div>
+                <button class="badge" onclick="openSetPin('big','Big','💼')">ตั้ง PIN</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="settings-section">
         <div class="settings-section-title">อันตราย</div>
         <div class="card">
             <div class="settings-row" style="border-bottom:none">
@@ -5505,6 +5524,7 @@ function renderPortfolioSettings() {
                 <span style="color:var(--text-muted)">›</span>
             </div>`).join('');
     }
+    updateClientPinUI(); // refresh PIN status badges
 }
 
 // ═══════════════════════════════════════
@@ -6276,6 +6296,35 @@ async function fetchYahooBatch(symbols) {
     ]);
 
     return { ...usResult, ...thResult, ...hkResult };
+}
+
+// ═══════════════════════════════════════
+//  CLIENT PIN MANAGEMENT
+// ═══════════════════════════════════════
+async function hashPin(pin) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode('pfDash2024_' + pin); // salted so plain PIN isn't in a rainbow table
+    const buf  = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function openSetPin(profileId, name, emoji) {
+    const pin = prompt(`ตั้ง PIN ของ ${emoji} ${name}\n(ตัวเลข 6 หลัก):`, '');
+    if (pin === null) return; // cancelled
+    if (!/^\d{6}$/.test(pin.trim())) { alert('PIN ต้องเป็นตัวเลข 6 หลักเท่านั้น'); return; }
+    if (!S.clientPins) S.clientPins = {};
+    S.clientPins[profileId] = await hashPin(pin.trim());
+    save();
+    updateClientPinUI();
+    alert(`✓ ตั้ง PIN ของ ${name} เรียบร้อยแล้ว\nข้อมูลจะ sync ขึ้น cloud อัตโนมัติ`);
+}
+
+function updateClientPinUI() {
+    ['dew','dike','big'].forEach(id => {
+        const cap = id.charAt(0).toUpperCase() + id.slice(1);
+        const el  = document.getElementById('pinStatus' + cap);
+        if (el) el.textContent = S.clientPins?.[id] ? '✓ ตั้งค่าแล้ว' : 'ยังไม่ได้ตั้ง PIN';
+    });
 }
 
 // ═══════════════════════════════════════

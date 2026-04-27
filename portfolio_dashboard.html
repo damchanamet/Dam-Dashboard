@@ -3760,10 +3760,10 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
                     mainPct = distAboveStr.toFixed(1) + '%'; mainLabel = 'สูงกว่า Strike — ขาย 2×';
                 } else if (nearStrike) {
                     statusCol = '#f97316'; statusLabel = '⚠️ NEAR STRIKE';
-                    mainPct = distBelowStr.toFixed(1) + '%'; mainLabel = 'ต่ำกว่า Strike นิดเดียว';
+                    mainPct = distBelowStr.toFixed(1) + '%'; mainLabel = `ใกล้ Strike · KO ห่าง ${distFromKO.toFixed(1)}%`;
                 } else {
                     statusCol = '#10b981'; statusLabel = '✅ SAFE ZONE';
-                    mainPct = distBelowStr.toFixed(1) + '%'; mainLabel = 'ต่ำกว่า Strike ปลอดภัย';
+                    mainPct = distFromKO.toFixed(1) + '%'; mainLabel = `ห่างจาก KO · Strike ห่าง ${distBelowStr.toFixed(1)}%`;
                 }
                 statusHtml = `<div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:10px;border:1px solid ${statusCol}33">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">

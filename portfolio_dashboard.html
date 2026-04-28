@@ -1776,13 +1776,17 @@ async function init() {
     }
 }
 
-function save() {
-    // Stamp every save with a timestamp for conflict detection across devices
-    S._lastModified = Date.now();
+// mode: 'structure' (user edited portfolio) | 'priceOnly' (auto price refresh)
+function save(mode = 'structure') {
+    const now = Date.now();
+    S._lastModified = now;
+    // _structureModified only advances on real portfolio edits, NOT price refreshes
+    // This prevents Mac's 15-min price refresh from overwriting iPhone's structural edits
+    if (mode !== 'priceOnly') S._structureModified = now;
     // Persist latest FX rates so client_dashboard can use the real rate
     if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
     localStorage.setItem('pfdata', JSON.stringify(S));
-    cloudSave(); // debounced push to JSONBin
+    cloudSave(mode);
 }
 
 // ═══════════════════════════════════════
@@ -1848,10 +1852,12 @@ async function _cloudPullIfNewer() {
         if (!res.ok) return false;
         const data = await res.json();
         if (data && data.portfolios) {
-            const cloudTs = data._lastModified || 0;
-            const localTs = S._lastModified   || 0;
+            // Compare _structureModified (not _lastModified) so price refreshes
+            // on this device don't falsely "win" over structural edits from another device
+            const cloudTs = data._structureModified || data._lastModified || 0;
+            const localTs = S._structureModified   || S._lastModified   || 0;
             if (cloudTs > localTs) {
-                // Cloud has newer data (edited on another device) — pull it
+                // Cloud has newer structural data (edited on another device) — pull it
                 S = data;
                 S.portfolios  = S.portfolios  || [];
                 S.holdings    = S.holdings    || [];
@@ -1868,13 +1874,51 @@ async function _cloudPullIfNewer() {
     return false;
 }
 
+let _pendingSaveMode = 'structure'; // track whether pending push is price-only or structural
+
 async function _cloudPush() {
     const { key, id } = _cloudCfg();
     if (!key || !id) return;
-    _cloudTimer = null;  // reset timer ทุกครั้งที่ push จริง
+    _cloudTimer = null;
     _cloudSyncing = true; _cloudError = false;
     _updateCloudUI();
     try {
+        // ── Price-only push: merge cloud structure first ──────────────────────
+        // If this push was triggered by a price refresh (not a user edit),
+        // we must preserve any structural changes made on another device.
+        // Otherwise Mac's price refresh would overwrite iPhone's portfolio edits.
+        if (_pendingSaveMode === 'priceOnly') {
+            try {
+                const chkRes = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
+                    headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
+                    signal: AbortSignal.timeout(6000)
+                });
+                if (chkRes.ok) {
+                    const cloudData = await chkRes.json();
+                    const cloudStructTs = cloudData?._structureModified || 0;
+                    const localStructTs = S._structureModified || 0;
+                    if (cloudStructTs > localStructTs && cloudData?.portfolios) {
+                        // Cloud has newer structure (edited on another device)
+                        // Apply cloud's structure but overlay our fresh prices
+                        const priceMap = {};
+                        S.holdings.forEach(h => {
+                            if (h.currentPrice && h.lastFetch) priceMap[h.id] = { currentPrice: h.currentPrice, lastFetch: h.lastFetch };
+                        });
+                        S = { ...cloudData };
+                        S.portfolios  = S.portfolios  || [];
+                        S.holdings    = (S.holdings || []).map(h => ({ ...h, ...(priceMap[h.id] || {}) }));
+                        S.liabilities = S.liabilities || [];
+                        S.snapshots   = S.snapshots   || [];
+                        if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+                        S._lastModified = Date.now();
+                        _syncVCFromS();
+                        localStorage.setItem('pfdata', JSON.stringify(S));
+                        renderAll(); // show merged data immediately
+                    }
+                }
+            } catch(e) { /* merge check failed — push as-is */ }
+        }
+
         const res = await fetch(`https://api.jsonbin.io/v3/b/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', 'X-Master-Key': key },
@@ -1883,25 +1927,24 @@ async function _cloudPush() {
         _cloudSyncing = false;
         _cloudError = !res.ok;
         if (res.ok) {
-            _cloudDirty = false;  // push สำเร็จ ล้าง dirty flag
+            _cloudDirty = false;
             localStorage.setItem('jb_lastSync', new Date().toISOString());
         } else {
-            // Push ล้มเหลว → retry อีก 5 วิ
             setTimeout(_cloudPush, 5000);
         }
     } catch(e) {
         _cloudSyncing = false; _cloudError = true;
-        // Network error → retry อีก 8 วิ
         setTimeout(_cloudPush, 8000);
     }
     _updateCloudUI();
 }
 
-function cloudSave() {
+function cloudSave(mode = 'structure') {
     if (!_cloudEnabled()) return;
     _cloudDirty = true;
+    _pendingSaveMode = mode; // remember whether this is price-only or structural
     if (_cloudTimer) clearTimeout(_cloudTimer);
-    _cloudTimer = setTimeout(_cloudPush, 800); // ลด debounce 3s → 0.8s
+    _cloudTimer = setTimeout(_cloudPush, 800);
 }
 
 function cloudSyncNowBtn() { _cloudPush(); }
@@ -5931,7 +5974,9 @@ async function fetchAllPrices() {
 
     await fxPromise;
 
-    save(); renderAll();
+    // 'priceOnly' = don't advance _structureModified, so this push won't
+    // overwrite structural edits (add/delete/edit holdings) made on another device
+    save('priceOnly'); renderAll();
 
     const now = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
     let msg = `อัปเดต ${now} · ✓ ${ok}`;

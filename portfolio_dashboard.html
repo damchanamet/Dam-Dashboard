@@ -3582,13 +3582,33 @@ function toggleVestingPanel() {
     panel.style.display = isHidden ? '' : 'none';
     if (isHidden) {
         const isAcc = document.getElementById('accDecTypeInput').value !== 'decumulator';
-        const id = document.getElementById('editAccDecId').value;
-        const h  = S.holdings.find(x => x.id === id);
+        const id    = document.getElementById('editAccDecId').value;
+        const h     = S.holdings.find(x => x.id === id);
+
         if (isAcc) {
+            // ACC: input = number of days; receives shares
+            document.getElementById('vestingPanelTitle').textContent  = '📦 บันทึก Vesting (รับหุ้น)';
+            document.getElementById('vestingInputLabel').textContent   = 'จำนวนวันในรอบนี้';
+            document.getElementById('vestingConfirmBtn').textContent   = '✓ ยืนยันรับหุ้น';
             document.getElementById('vestDays').value = 10;
         } else {
-            // DEC: default = 1 period worth of shares
-            document.getElementById('vestDays').value = parseFloat(h?.periodQty) || '';
+            // DEC: input = number of shares to sell at strike price
+            // If spot > strike AND gearing > 1, default = periodQty × gearing
+            const periodQty = parseFloat(h?.periodQty) || 0;
+            const gearing   = parseFloat(h?.gearing)   || 1;
+            const strike    = parseFloat(h?.strike)     || 0;
+            const sym       = (h?.optionUnderlying || '').toUpperCase().trim();
+            const spot      = getUnderlyingPrice(sym)?.price || 0;
+            const aboveStrike = spot > 0 && strike > 0 && spot > strike;
+            const defaultShares = (aboveStrike && gearing > 1) ? periodQty * gearing : periodQty;
+            const gearNote  = (aboveStrike && gearing > 1)
+                ? ` (${gearing}x gearing — spot เกิน strike)`
+                : ` (${periodQty} หุ้น/period)`;
+
+            document.getElementById('vestingPanelTitle').textContent  = '💰 บันทึก Vesting (ขายหุ้น)';
+            document.getElementById('vestingInputLabel').textContent   = `จำนวนหุ้นที่จะขาย${gearNote}`;
+            document.getElementById('vestingConfirmBtn').textContent   = '✓ ยืนยันขายหุ้น';
+            document.getElementById('vestDays').value = defaultShares || '';
         }
         updateVestCalc();
         document.getElementById('vestDays').focus();

@@ -1624,9 +1624,12 @@ document.addEventListener('visibilitychange', () => {
         }
     } else if (document.visibilityState === 'visible') {
         // Pull latest cloud data — another device may have edited while we were away
-        // Only if we have no pending local changes (to avoid overwriting in-progress edits)
-        if (!_cloudDirty && !_cloudSyncing) {
-            _cloudPullIfNewer();
+        // Use a 1-second delay: if another device just made an edit, their 800ms push
+        // debounce will have fired by then, so we get the freshest data.
+        if (!_cloudDirty) {
+            setTimeout(() => {
+                if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing) _cloudPullIfNewer();
+            }, 1000);
         }
     }
 });
@@ -1647,7 +1650,7 @@ function _schedulePullCheck() {
             await _cloudPullIfNewer();
         }
         _schedulePullCheck(); // reschedule
-    }, 2 * 60 * 1000); // every 2 minutes
+    }, 30 * 1000); // every 30 seconds
 }
 
 // FX rates: THB per 1 unit of foreign currency (e.g. fxRates.USD = 35.5 → 1 USD = ฿35.5)
@@ -1754,6 +1757,10 @@ async function init() {
             S.holdings    = S.holdings    || [];
             S.liabilities = S.liabilities || [];
             S.snapshots   = S.snapshots   || [];
+            // Restore last-known FX rates so calculations are correct before price refresh
+            if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
+                fxRates = { ...S.lastFxRates };
+            }
         }
     } catch(e) {}
     _syncVCFromS(); // wire up VC vars from S (migrates old localStorage data on first run)
@@ -1772,7 +1779,14 @@ async function init() {
     if (_cloudEnabled()) {
         const loaded = await cloudLoad();
         if (loaded) renderAll();
-        _schedulePullCheck(); // start periodic pull to stay in sync with other devices
+        _schedulePullCheck(); // start periodic pull every 30s
+        // Retry pull after 10s — catches the case where another device's push hadn't
+        // landed yet when cloudLoad() ran above (800ms push debounce + network lag)
+        setTimeout(async () => {
+            if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing) {
+                await _cloudPullIfNewer();
+            }
+        }, 10000);
     }
 }
 
@@ -1831,6 +1845,10 @@ async function cloudLoad() {
             S.holdings    = S.holdings    || [];
             S.liabilities = S.liabilities || [];
             S.snapshots   = S.snapshots   || [];
+            // Restore FX rates from cloud data so display is correct immediately
+            if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
+                fxRates = { ...S.lastFxRates };
+            }
             _syncVCFromS(); // re-wire VC vars to new S object from cloud
             localStorage.setItem('pfdata', JSON.stringify(S));
             localStorage.setItem('jb_lastSync', new Date().toISOString());
@@ -1863,6 +1881,10 @@ async function _cloudPullIfNewer() {
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
                 S.snapshots   = S.snapshots   || [];
+                // Restore FX rates from pulled data
+                if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
+                    fxRates = { ...S.lastFxRates };
+                }
                 _syncVCFromS();
                 localStorage.setItem('pfdata', JSON.stringify(S));
                 localStorage.setItem('jb_lastSync', new Date().toISOString());
@@ -5834,7 +5856,23 @@ function buildCandidates(h) {
 
 // ── Fetch FX rates (THB per 1 foreign currency unit) ──
 async function fetchFXRates() {
-    // Primary: open.er-api.com — free, no API key, 1500 req/month
+    // Primary: Yahoo Finance — real-time rates, all pairs in parallel
+    // open.er-api.com is free but only updates every 24h → always stale
+    const pairs = [['USDTHB=X','USD'],['HKDTHB=X','HKD'],['SGDTHB=X','SGD'],
+                   ['GBPTHB=X','GBP'],['EURTHB=X','EUR'],['JPYTHB=X','JPY'],['AUDTHB=X','AUD']];
+    try {
+        const results = await Promise.allSettled(pairs.map(([sym]) => fetchYahooSingle(sym)));
+        let got = 0;
+        const newRates = { THB: 1 };
+        results.forEach((r, i) => {
+            if (r.status === 'fulfilled' && r.value?.price) {
+                newRates[pairs[i][1]] = r.value.price;
+                got++;
+            }
+        });
+        if (got > 0) { fxRates = newRates; return true; }
+    } catch(e) {}
+    // Fallback: open.er-api.com (24h cache, but covers all currencies at once)
     try {
         const r = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(7000) });
         if (r.ok) {
@@ -5848,18 +5886,6 @@ async function fetchFXRates() {
                 return true;
             }
         }
-    } catch(e) {}
-    // Fallback: fetch key pairs via Yahoo Finance
-    try {
-        const pairs = [['USDTHB=X','USD'],['HKDTHB=X','HKD'],['SGDTHB=X','SGD'],
-                       ['GBPTHB=X','GBP'],['EURTHB=X','EUR'],['JPYTHB=X','JPY'],['AUDTHB=X','AUD']];
-        let got = 0;
-        for (const [sym, cur] of pairs) {
-            const res = await fetchYahooSingle(sym);
-            if (res) { fxRates[cur] = res.price; got++; }
-        }
-        fxRates.THB = 1;
-        return got > 0;
     } catch(e) {}
     return false;
 }

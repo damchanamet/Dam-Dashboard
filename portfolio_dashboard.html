@@ -56,6 +56,15 @@ body {
 .btn-refresh:active { opacity: 0.6; }
 .btn-refresh.loading .spin { display: inline-block; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.btn-save-sync {
+    background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.45);
+    color: #a5b4fc; padding: 7px 14px; border-radius: 20px;
+    font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;
+    transition: all 0.2s;
+}
+.btn-save-sync:active { opacity: 0.6; }
+.btn-save-sync.saving { opacity: 0.7; pointer-events: none; }
+.btn-save-sync.saved { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.45); color: #6ee7b7; }
 
 /* ── Bottom Nav ── */
 .bottom-nav {
@@ -334,9 +343,14 @@ body {
         <div class="header-title">📊 Portfolio</div>
         <div class="header-sub" id="lastUpdated">กดปุ่มขวาเพื่ออัปเดตราคา</div>
     </div>
-    <button class="btn-refresh" id="btnRefresh" onclick="fetchAllPrices()">
-        <span class="spin">↻</span> อัปเดตราคา
-    </button>
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="btn-refresh" id="btnRefresh" onclick="fetchAllPrices()">
+            <span class="spin">↻</span> อัปเดตราคา
+        </button>
+        <button class="btn-save-sync" id="btnSaveSync" onclick="saveAndSync()">
+            💾 <span id="btnSaveSyncLabel">Save & Sync</span>
+        </button>
+    </div>
 </header>
 
 <!-- ══ PAGE: SUMMARY ══ -->
@@ -1623,12 +1637,14 @@ document.addEventListener('visibilitychange', () => {
             _cloudPush();
         }
     } else if (document.visibilityState === 'visible') {
-        // Pull latest cloud data — another device may have edited while we were away
-        // Use a 1-second delay: if another device just made an edit, their 800ms push
-        // debounce will have fired by then, so we get the freshest data.
+        // Pull on becoming visible — 1s delay lets any in-flight push from another
+        // device land first. Skip if we pulled very recently (< 20s) to save API calls.
         if (!_cloudDirty) {
             setTimeout(() => {
-                if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing) _cloudPullIfNewer();
+                const age = Date.now() - _lastPullTime;
+                if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing && age > 20000) {
+                    _cloudPullIfNewer();
+                }
             }, 1000);
         }
     }
@@ -1650,7 +1666,7 @@ function _schedulePullCheck() {
             await _cloudPullIfNewer();
         }
         _schedulePullCheck(); // reschedule
-    }, 30 * 1000); // every 30 seconds
+    }, 3 * 60 * 1000); // every 3 minutes (balances freshness vs API quota)
 }
 
 // FX rates: THB per 1 unit of foreign currency (e.g. fxRates.USD = 35.5 → 1 USD = ฿35.5)
@@ -1779,14 +1795,17 @@ async function init() {
     if (_cloudEnabled()) {
         const loaded = await cloudLoad();
         if (loaded) renderAll();
-        _schedulePullCheck(); // start periodic pull every 30s
-        // Retry pull after 10s — catches the case where another device's push hadn't
-        // landed yet when cloudLoad() ran above (800ms push debounce + network lag)
-        setTimeout(async () => {
-            if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing) {
-                await _cloudPullIfNewer();
-            }
-        }, 10000);
+        _schedulePullCheck();
+        // Staggered startup retries — covers the race: Device B opens while Device A's
+        // 800ms push debounce hasn't fired yet. The version counter (_v) ensures we
+        // correctly detect and pull the new version once it lands.
+        [3000, 10000, 30000].forEach(delay => {
+            setTimeout(async () => {
+                if (_cloudEnabled() && !_cloudDirty && !_cloudSyncing) {
+                    await _cloudPullIfNewer();
+                }
+            }, delay);
+        });
     }
 }
 
@@ -1794,10 +1813,10 @@ async function init() {
 function save(mode = 'structure') {
     const now = Date.now();
     S._lastModified = now;
-    // _structureModified only advances on real portfolio edits, NOT price refreshes
-    // This prevents Mac's 15-min price refresh from overwriting iPhone's structural edits
-    if (mode !== 'priceOnly') S._structureModified = now;
-    // Persist latest FX rates so client_dashboard can use the real rate
+    if (mode !== 'priceOnly') {
+        S._structureModified = now;          // keep for backward compat
+        S._v = (S._v || 0) + 1;             // ← version counter: integer, clock-independent
+    }
     if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
     localStorage.setItem('pfdata', JSON.stringify(S));
     cloudSave(mode);
@@ -1809,7 +1828,8 @@ function save(mode = 'structure') {
 let _cloudTimer   = null;
 let _cloudSyncing = false;
 let _cloudError   = false;
-let _cloudDirty   = false;  // มีการแก้ข้อมูลที่ยังไม่ได้ push
+let _cloudDirty   = false;   // มีการแก้ข้อมูลที่ยังไม่ได้ push
+let _lastPullTime = 0;       // timestamp of last successful pull (throttle guard)
 
 function _cloudCfg() {
     return { key: localStorage.getItem('jb_key') || '', id: localStorage.getItem('jb_id') || '' };
@@ -1835,30 +1855,43 @@ async function cloudLoad() {
     if (!key || !id) return false;
     try {
         const res = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
-            headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' }
+            headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
+            signal: AbortSignal.timeout(8000)   // ← timeout (was missing before!)
         });
         if (!res.ok) return false;
         const data = await res.json();
         if (data && data.portfolios) {
-            S = data;
-            S.portfolios  = S.portfolios  || [];
-            S.holdings    = S.holdings    || [];
-            S.liabilities = S.liabilities || [];
-            S.snapshots   = S.snapshots   || [];
-            // Restore FX rates from cloud data so display is correct immediately
-            if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
-                fxRates = { ...S.lastFxRates };
+            const cloudV = data._v || 0;
+            const localV = S._v   || 0;
+            if (cloudV >= localV) {
+                // Cloud is same version or newer — use it (normal case)
+                S = data;
+                S.portfolios  = S.portfolios  || [];
+                S.holdings    = S.holdings    || [];
+                S.liabilities = S.liabilities || [];
+                S.snapshots   = S.snapshots   || [];
+                if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
+                    fxRates = { ...S.lastFxRates };
+                }
+                _syncVCFromS();
+                localStorage.setItem('pfdata', JSON.stringify(S));
+                localStorage.setItem('jb_lastSync', new Date().toISOString());
+                _lastPullTime = Date.now();
+                return true;
+            } else {
+                // Local is AHEAD of cloud (previous push must have failed)
+                // Keep local data and re-push it now
+                console.warn(`[sync] Local v${localV} > cloud v${cloudV} — re-pushing local data`);
+                cloudSave('structure');
+                return false;
             }
-            _syncVCFromS(); // re-wire VC vars to new S object from cloud
-            localStorage.setItem('pfdata', JSON.stringify(S));
-            localStorage.setItem('jb_lastSync', new Date().toISOString());
-            return true;
         }
-    } catch(e) { console.warn('Cloud load failed', e); }
+    } catch(e) { console.warn('[sync] Cloud load failed', e); }
     return false;
 }
 
-// Pull from cloud only if cloud data is newer than local — avoids overwriting edits
+// Pull from cloud only if cloud version (_v) is strictly greater than local
+// Using integer version counter avoids all clock-drift / equal-timestamp issues
 async function _cloudPullIfNewer() {
     const { key, id } = _cloudCfg();
     if (!key || !id) return false;
@@ -1870,24 +1903,22 @@ async function _cloudPullIfNewer() {
         if (!res.ok) return false;
         const data = await res.json();
         if (data && data.portfolios) {
-            // Compare _structureModified (not _lastModified) so price refreshes
-            // on this device don't falsely "win" over structural edits from another device
-            const cloudTs = data._structureModified || data._lastModified || 0;
-            const localTs = S._structureModified   || S._lastModified   || 0;
-            if (cloudTs > localTs) {
-                // Cloud has newer structural data (edited on another device) — pull it
+            const cloudV = data._v || 0;
+            const localV = S._v   || 0;
+            if (cloudV > localV) {
+                // Cloud has a higher version — another device made structural edits
                 S = data;
                 S.portfolios  = S.portfolios  || [];
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
                 S.snapshots   = S.snapshots   || [];
-                // Restore FX rates from pulled data
                 if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
                     fxRates = { ...S.lastFxRates };
                 }
                 _syncVCFromS();
                 localStorage.setItem('pfdata', JSON.stringify(S));
                 localStorage.setItem('jb_lastSync', new Date().toISOString());
+                _lastPullTime = Date.now();
                 renderAll();
                 return true;
             }
@@ -1917,9 +1948,9 @@ async function _cloudPush() {
                 });
                 if (chkRes.ok) {
                     const cloudData = await chkRes.json();
-                    const cloudStructTs = cloudData?._structureModified || 0;
-                    const localStructTs = S._structureModified || 0;
-                    if (cloudStructTs > localStructTs && cloudData?.portfolios) {
+                    const cloudV = cloudData?._v || 0;
+                    const localV = S._v || 0;
+                    if (cloudV > localV && cloudData?.portfolios) {
                         // Cloud has newer structure (edited on another device)
                         // Apply cloud's structure but overlay our fresh prices
                         const priceMap = {};
@@ -1970,6 +2001,60 @@ function cloudSave(mode = 'structure') {
 }
 
 function cloudSyncNowBtn() { _cloudPush(); }
+
+// ── Save & Sync button — explicit commit, 100% reliable ──────────────────────
+// User presses this to say "this is the authoritative version — all devices use this"
+// Skips 800ms debounce, pushes immediately, increments _v
+async function saveAndSync() {
+    if (!_cloudEnabled()) {
+        alert('ยังไม่ได้ตั้งค่า Cloud Sync\nไปที่ Settings → Cloud Sync ก่อนนะครับ');
+        return;
+    }
+    const btn   = document.getElementById('btnSaveSync');
+    const label = document.getElementById('btnSaveSyncLabel');
+    if (!btn || btn.classList.contains('saving')) return;
+
+    // Force a structural save with fresh _v
+    S._v = (S._v || 0) + 1;
+    S._structureModified = Date.now();
+    S._lastModified      = S._structureModified;
+    if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+    localStorage.setItem('pfdata', JSON.stringify(S));
+
+    // Update UI to loading
+    btn.classList.add('saving');
+    label.textContent = 'กำลัง Save…';
+
+    // Clear any pending debounce and push immediately
+    if (_cloudTimer) { clearTimeout(_cloudTimer); _cloudTimer = null; }
+    const { key, id } = _cloudCfg();
+    try {
+        const res = await fetch(`https://api.jsonbin.io/v3/b/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-Master-Key': key },
+            body: JSON.stringify(S),
+            signal: AbortSignal.timeout(10000)
+        });
+        if (res.ok) {
+            _cloudDirty = false;
+            localStorage.setItem('jb_lastSync', new Date().toISOString());
+            btn.classList.remove('saving');
+            btn.classList.add('saved');
+            label.textContent = '✓ Saved! (v' + S._v + ')';
+            setTimeout(() => {
+                btn.classList.remove('saved');
+                label.textContent = 'Save & Sync';
+            }, 3000);
+        } else {
+            throw new Error('HTTP ' + res.status);
+        }
+    } catch(e) {
+        btn.classList.remove('saving');
+        label.textContent = '❌ ล้มเหลว — ลองใหม่';
+        setTimeout(() => { label.textContent = 'Save & Sync'; }, 3000);
+    }
+    _updateCloudUI();
+}
 
 function _updateCloudUI() {
     const badge    = document.getElementById('cloudStatusBadge');
@@ -4303,7 +4388,11 @@ function renderOptionsList(key, portId) {
         }).join('');
 
         return `<div style="margin-bottom:4px">
-            <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:0.5px;padding:6px 0 6px;text-transform:uppercase">${emoji} ${label}S</div>
+            <div style="display:flex;align-items:center;gap:10px;margin:14px 0 10px">
+                <div style="flex:1;height:2px;background:${color}"></div>
+                <div style="font-size:16px;font-weight:900;color:${color};letter-spacing:2px;padding:5px 18px;border-radius:20px;background:${color}25;border:2px solid ${color};white-space:nowrap">${emoji} ${label}S</div>
+                <div style="flex:1;height:2px;background:${color}"></div>
+            </div>
             ${rows}
         </div>`;
     };
@@ -4899,7 +4988,11 @@ function renderDamOptionsList(opts) {
         }).join('');
 
         return `<div style="margin-bottom:4px">
-            <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:0.5px;padding:6px 0 6px;text-transform:uppercase">${emoji} ${label}S</div>
+            <div style="display:flex;align-items:center;gap:10px;margin:14px 0 10px">
+                <div style="flex:1;height:2px;background:${color}"></div>
+                <div style="font-size:16px;font-weight:900;color:${color};letter-spacing:2px;padding:5px 18px;border-radius:20px;background:${color}25;border:2px solid ${color};white-space:nowrap">${emoji} ${label}S</div>
+                <div style="flex:1;height:2px;background:${color}"></div>
+            </div>
             ${rows}
         </div>`;
     };

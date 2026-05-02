@@ -2040,7 +2040,8 @@ async function saveAndSync() {
             localStorage.setItem('jb_lastSync', new Date().toISOString());
             btn.classList.remove('saving');
             btn.classList.add('saved');
-            label.textContent = '✓ Saved! (v' + S._v + ')';
+            const t = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            label.textContent = '✓ Saved ' + t;
             setTimeout(() => {
                 btn.classList.remove('saved');
                 label.textContent = 'Save & Sync';
@@ -3844,7 +3845,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
         const expDate = h.expiry ? new Date(h.expiry) : null;
         const daysLeft = expDate ? Math.ceil((expDate - new Date()) / 86400000) : null;
         const expLabel = expDate ? expDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}) : '—';
-        const urgCol  = daysLeft !== null && daysLeft <= 30 ? 'var(--red)' : daysLeft <= 90 ? '#f97316' : 'var(--text-muted)';
+        const urgCol  = daysLeft !== null && daysLeft < 7 ? 'var(--red)' : daysLeft <= 21 ? 'var(--yellow)' : 'var(--text)';
 
         // Spot price from underlying cache or holdings
         const underlying = getUnderlyingPrice(h.optionUnderlying);
@@ -4086,7 +4087,7 @@ function renderFCNList(key, portId, elOverride = null) {
         const expDate    = h.expiry ? new Date(h.expiry) : null;
         const daysLeft   = expDate ? Math.ceil((expDate - new Date()) / 86400000) : null;
         const expLabel   = expDate ? expDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}) : '—';
-        const urgCol     = daysLeft !== null && daysLeft <= 14 ? 'var(--red)' : daysLeft <= 60 ? 'var(--yellow)' : 'var(--text-muted)';
+        const urgCol     = daysLeft !== null && daysLeft < 7 ? 'var(--red)' : daysLeft <= 21 ? 'var(--yellow)' : 'var(--text)';
 
         // Spot price
         const underlying = getUnderlyingPrice(h.optionUnderlying);
@@ -4360,7 +4361,7 @@ function renderOptionsList(key, portId) {
             const expDate   = o.expiry ? new Date(o.expiry) : null;
             const daysLeft  = expDate ? Math.ceil((expDate - new Date()) / 86400000) : null;
             const expLabel  = expDate ? expDate.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' }) : '—';
-            const urgentCol = daysLeft !== null && daysLeft <= 14 ? 'var(--red)' : (daysLeft <= 30 ? 'var(--yellow)' : 'var(--text-muted)');
+            const urgentCol = daysLeft !== null && daysLeft < 7 ? 'var(--red)' : (daysLeft <= 21 ? 'var(--yellow)' : 'var(--text)');
             const contracts = o.optionContracts || 1;
             const lot       = o.lotSize || 100;
             const moneyness = buildMoneynessStrip(o);
@@ -4675,7 +4676,7 @@ function renderSummary() {
             const sym        = useUsd ? '$ ' : '฿ ';
             const cmpSym     = useUsd ? '$ ' : '฿';
             const netStr     = assets
-                ? sym + Math.round(dispNet).toLocaleString('en')
+                ? sym + compact(dispNet)
                 : sym + '—';
             const assetsStr  = assets ? cmpSym + compact(dispAssets) : '—';
             const liabStr    = liab   ? cmpSym + compact(dispLiab)   : sym + '0';
@@ -4959,7 +4960,7 @@ function renderDamOptionsList(opts) {
             const expDate   = o.expiry ? new Date(o.expiry) : null;
             const daysLeft  = expDate ? Math.ceil((expDate - new Date()) / 86400000) : null;
             const expLabel  = expDate ? expDate.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' }) : '—';
-            const urgentCol = daysLeft !== null && daysLeft <= 14 ? 'var(--red)' : (daysLeft <= 30 ? 'var(--yellow)' : 'var(--text-muted)');
+            const urgentCol = daysLeft !== null && daysLeft < 7 ? 'var(--red)' : (daysLeft <= 21 ? 'var(--yellow)' : 'var(--text)');
             const contracts = o.optionContracts || 1;
             const lot       = o.lotSize || 100;
             const moneyness = buildMoneynessStrip(o);
@@ -5234,17 +5235,50 @@ function renderHistoryPage() {
     const el = document.getElementById('snapshotList');
     if (!S.snapshots.length) {
         el.innerHTML = `<div class="empty-state"><div class="icon">📅</div><p>กด "+ บันทึกวันนี้"<br>เพื่อเริ่มเก็บประวัติมูลค่า</p></div>`;
-    } else {
-        const sorted = [...S.snapshots].sort((a,b)=>new Date(b.date)-new Date(a.date));
-        el.innerHTML = sorted.map(s => {
-            const nw  = snapNetWorth(s);
-            const tag = s.auto ? '<span style="font-size:10px;color:var(--text-muted);margin-left:6px">อัตโนมัติ</span>' : '';
-            return `<div class="snapshot-row" style="cursor:pointer" onclick="openEditSnapshot('${s.date}')">
-                <div class="snapshot-date">${new Date(s.date).toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'})}${tag}</div>
-                <div class="snapshot-vals" style="color:var(--text);font-weight:600">฿ ${Math.round(nw).toLocaleString('en')}</div>
-            </div>`;
-        }).join('');
+        return renderHistChart();
     }
+    const sorted = [...S.snapshots].sort((a,b) => new Date(b.date) - new Date(a.date));
+
+    // Group by year-month key (e.g. "2026-05")
+    const groups = {};
+    sorted.forEach(s => {
+        const d   = new Date(s.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(s);
+    });
+
+    const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+
+    const makeRows = items => items.map(s => {
+        const nw  = snapNetWorth(s);
+        const tag = s.auto ? '<span style="font-size:10px;color:var(--text-muted);margin-left:6px">อัตโนมัติ</span>' : '';
+        return `<div class="snapshot-row" style="cursor:pointer" onclick="openEditSnapshot('${s.date}')">
+            <div class="snapshot-date">${new Date(s.date).toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'})}${tag}</div>
+            <div class="snapshot-vals" style="color:var(--text);font-weight:600">฿ ${Math.round(nw).toLocaleString('en')}</div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = Object.entries(groups).map(([key, items]) => {
+        const [y, m]   = key.split('-');
+        const label    = new Date(+y, +m-1, 1).toLocaleDateString('th-TH', { month:'long', year:'numeric' });
+        const isCurrent = key === currentKey;
+        if (isCurrent) {
+            return `<div style="margin-bottom:4px">
+                <div style="font-size:12px;font-weight:700;color:var(--accent);padding:6px 0 4px">${label}</div>
+                ${makeRows(items)}
+            </div>`;
+        }
+        return `<details style="margin-bottom:2px">
+            <summary style="list-style:none;cursor:pointer;padding:10px 0;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+                <span style="font-size:13px;font-weight:600;color:var(--text-muted)">${label}</span>
+                <span style="font-size:11px;color:var(--text-muted)">${items.length} รายการ ▾</span>
+            </summary>
+            <div>${makeRows(items)}</div>
+        </details>`;
+    }).join('');
+
     renderHistChart();
 }
 

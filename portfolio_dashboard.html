@@ -3330,9 +3330,10 @@ function renderWatermarkSection(key, portId) {
     const options  = S.holdings.filter(h => h.portfolioId === portId && h.type === 'option');
     const allH     = [...holdings, ...options];
     const assetsThb = allH.reduce((s, h) => {
-        const price = parseFloat(h.currentPrice || h.price) || 0;
-        const qty   = parseFloat(h.qty) || 0;
-        const cur   = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
+        const covCap = h.type !== 'option' ? getCoveredCallCap(h) : null;
+        const price  = covCap ? covCap.effectivePrice : (parseFloat(h.currentPrice || h.price) || 0);
+        const qty    = parseFloat(h.qty) || 0;
+        const cur    = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
         return s + toTHB(price * qty, cur);
     }, 0);
     const liabThb  = portLiabTHB(portId);

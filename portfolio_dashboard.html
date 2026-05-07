@@ -2959,10 +2959,11 @@ function renderExtPage(key) {
     let totalAssetsThb = 0;
     const totals = {};
     holdings.forEach(h => {
-        const price = parseFloat(h.currentPrice || h.price) || 0;
-        const qty   = parseFloat(h.qty) || 0;
-        const val   = price * qty;
-        const cur   = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
+        const covCap = getCoveredCallCap(h);
+        const price  = covCap ? covCap.effectivePrice : (parseFloat(h.currentPrice || h.price) || 0);
+        const qty    = parseFloat(h.qty) || 0;
+        const val    = price * qty;
+        const cur    = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
         totalAssetsThb += toTHB(val, cur);
         if (val > 0) totals[cur] = (totals[cur] || 0) + val;
     });
@@ -3096,7 +3097,8 @@ function renderExtAllocChart(key, holdings, totalAssetsThb) {
 
     const items = holdings
         .map(h => {
-            const price  = parseFloat(h.currentPrice || h.price) || 0;
+            const covCap = getCoveredCallCap(h);
+            const price  = covCap ? covCap.effectivePrice : (parseFloat(h.currentPrice || h.price) || 0);
             const qty    = parseFloat(h.qty) || 0;
             const cur    = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
             const thbVal = toTHB(price * qty, cur);

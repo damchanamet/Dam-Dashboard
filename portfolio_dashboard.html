@@ -1822,7 +1822,11 @@ function save(mode = 'structure') {
         S._v = (S._v || 0) + 1;
         _setUnsaved(true);   // ← show indicator: มีการแก้ไขที่ยังไม่ได้ Save
     }
-    if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+    if (fxRates && Object.keys(fxRates).length > 1 && fxRates.USD) {
+        S.lastFxRates = { ...fxRates };
+        // Also cache FX separately so it survives even if pfdata is replaced by cloud pull
+        localStorage.setItem('lastFxRatesCache', JSON.stringify({ ...fxRates, _ts: Date.now() }));
+    }
     localStorage.setItem('pfdata', JSON.stringify(S));
     cloudSave(mode);
 }
@@ -6025,7 +6029,9 @@ async function fetchFXRates() {
                 got++;
             }
         });
-        if (got > 0) { fxRates = newRates; return true; }
+        if (got > 0 && newRates.USD) { fxRates = newRates; return true; }
+        // Partial success but USD missing — try to fill USD from open.er-api.com
+        if (got > 0) { fxRates = newRates; } // use partial rates for now
     } catch(e) {}
     // Fallback: open.er-api.com (24h cache, but covers all currencies at once)
     try {
@@ -6034,14 +6040,25 @@ async function fetchFXRates() {
             const d = await r.json();
             if (d.result === 'success' && d.rates?.THB) {
                 const usdThb = d.rates.THB;
-                fxRates = { THB: 1, USD: usdThb };
+                // Merge: keep Yahoo real-time rates for pairs we got, fill rest from er-api
+                const merged = { THB: 1, USD: usdThb };
                 for (const [cur, rate] of Object.entries(d.rates)) {
-                    if (cur !== 'THB' && rate > 0) fxRates[cur] = usdThb / rate;
+                    if (cur !== 'THB' && rate > 0) merged[cur] = usdThb / rate;
                 }
+                // Yahoo rates override er-api (more real-time)
+                fxRates = { ...merged, ...fxRates };
+                if (!fxRates.USD) fxRates.USD = usdThb;
                 return true;
             }
         }
     } catch(e) {}
+    // Last resort: restore from last known cached rates
+    const cached = S?.lastFxRates || JSON.parse(localStorage.getItem('lastFxRatesCache') || 'null');
+    if (cached && cached.USD) {
+        fxRates = { ...cached };
+        console.warn('FX: using cached rates from', new Date(cached._ts || 0).toLocaleString());
+        return 'cached';
+    }
     return false;
 }
 
@@ -6173,10 +6190,8 @@ async function fetchAllPrices() {
         }
     }
 
-    await fxPromise;
-
-    // 'priceOnly' = don't advance _structureModified, so this push won't
-    // overwrite structural edits (add/delete/edit holdings) made on another device
+    // Render immediately after stock prices are done — don't wait for FX
+    // (use whatever fxRates we have so far: cached / partial / fallback=35)
     save('priceOnly'); renderAll();
 
     const now = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
@@ -6185,6 +6200,19 @@ async function fetchAllPrices() {
     sub.textContent = msg;
     btn.classList.remove('loading');
     btn.innerHTML = '<span class="spin">↻</span> อัปเดตราคา';
+
+    // Wait for FX in background; if it finishes with fresh rates → re-render
+    const fxResult = await fxPromise;
+    if (fxResult === true) {
+        // Fresh FX rates arrived — cache them and re-render with correct values
+        localStorage.setItem('lastFxRatesCache', JSON.stringify({ ...fxRates, _ts: Date.now() }));
+        save('priceOnly'); renderAll();
+        const now2 = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+        sub.textContent = msg.replace(/อัปเดต \S+/, `อัปเดต ${now2}`) + ' · FX ✓';
+    } else if (!fxResult) {
+        // Both sources failed — show warning but portfolio is already visible
+        sub.textContent = msg + ' · ⚠️ FX ใช้ค่าเดิม';
+    }
 
     scheduleNextRefresh();
     checkAutoSave();

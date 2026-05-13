@@ -4382,7 +4382,8 @@ function renderOptionsList(key, portId) {
     const sortByExpiry = arr => arr.slice().sort((a, b) => {
         const da = a.expiry ? new Date(a.expiry).getTime() : Infinity;
         const db = b.expiry ? new Date(b.expiry).getTime() : Infinity;
-        return da - db;
+        if (da !== db) return da - db;
+        return (a.optionUnderlying || a.symbol || '').localeCompare(b.optionUnderlying || b.symbol || '');
     });
     const calls = sortByExpiry(opts.filter(o => o.optionType === 'call'));
     const puts  = sortByExpiry(opts.filter(o => o.optionType === 'put'));
@@ -4980,7 +4981,8 @@ function renderDamOptionsList(opts) {
     const sortByExpiry = arr => arr.slice().sort((a, b) => {
         const da = a.expiry ? new Date(a.expiry).getTime() : Infinity;
         const db = b.expiry ? new Date(b.expiry).getTime() : Infinity;
-        return da - db;
+        if (da !== db) return da - db;
+        return (a.optionUnderlying || a.symbol || '').localeCompare(b.optionUnderlying || b.symbol || '');
     });
     const calls = sortByExpiry(opts.filter(o => o.optionType === 'call'));
     const puts  = sortByExpiry(opts.filter(o => o.optionType === 'put'));

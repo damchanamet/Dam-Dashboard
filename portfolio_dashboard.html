@@ -3980,7 +3980,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
                             <span style="font-size:26px;font-weight:800;color:${statusCol};line-height:1">${mainPct}</span>
                             <span style="font-size:11px;color:var(--text-muted)">${mainLabel}</span>
                         </div>
-                        <span style="font-size:12px;font-weight:700">Spot ${fmtPrice(spot, cur)}</span>
+                        <span style="font-size:12px;font-weight:700;color:#60a5fa">Spot ${fmtPrice(spot, cur)}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;margin-bottom:6px">
                         <span style="font-size:12px;font-weight:700;color:var(--green)">Strike $${strike.toFixed(4)}</span>
@@ -4034,7 +4034,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
                             <span style="font-size:26px;font-weight:800;color:${statusCol};line-height:1">${mainPct}</span>
                             <span style="font-size:11px;color:var(--text-muted)">${mainLabel}</span>
                         </div>
-                        <span style="font-size:12px;font-weight:700">Spot ${fmtPrice(spot, cur)}</span>
+                        <span style="font-size:12px;font-weight:700;color:#60a5fa">Spot ${fmtPrice(spot, cur)}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;margin-bottom:6px">
                         <span style="font-size:12px;font-weight:700;color:#eab308">KO $${ko.toFixed(4)}</span>
@@ -4204,7 +4204,7 @@ function renderFCNList(key, portId, elOverride = null) {
                         <span style="font-size:26px;font-weight:800;color:${statusCol};line-height:1">${distPct.toFixed(1)}%</span>
                         <span style="font-size:11px;color:var(--text-muted)">ห่างจาก Barrier</span>
                     </div>
-                    <span style="font-size:12px;font-weight:700">Spot ${fmtPrice(spot, cur)}</span>
+                    <span style="font-size:12px;font-weight:700;color:#60a5fa">Spot ${fmtPrice(spot, cur)}</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:4px">
                     <span>Barrier ${fmtPrice(barrierPx,cur)} (${barrierPct}%)</span>

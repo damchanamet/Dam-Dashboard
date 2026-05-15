@@ -495,6 +495,15 @@ body {
     </div>
 </div>
 
+<!-- ══ POPUP: DIFF/DAY BREAKDOWN ══ -->
+<div id="diffDayPopup" style="display:none;position:fixed;z-index:9999;background:#1e2535;border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:14px 16px;min-width:220px;max-width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.6);pointer-events:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px">DIFF/DAY รายตัว</div>
+        <button onclick="document.getElementById('diffDayPopup').style.display='none'" style="background:none;border:none;color:var(--text-muted);font-size:16px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
+    </div>
+    <div id="diffDayPopupRows"></div>
+</div>
+
 <!-- ══ MODAL: OPTION ══ -->
 <div class="modal-overlay" id="optionModal">
 <div class="modal">
@@ -3051,7 +3060,7 @@ function renderExtPage(key) {
         if (EXT_PORTS[key]?.hasAccDec) {
             const accs = S.holdings.filter(h => h.portfolioId === portId && h.type === 'accumulator');
             let totalDiffDay = 0;
-            const lines = [];
+            const symMap = {};
             for (const h of accs) {
                 const sym    = (h.optionUnderlying || '').toUpperCase().trim();
                 const spot   = getUnderlyingPrice(sym)?.price;
@@ -3060,13 +3069,19 @@ function renderExtPage(key) {
                 if (!spot || !strike || !qty) continue;
                 const diff = (spot - strike) * qty;
                 totalDiffDay += diff;
-                lines.push(`${sym} (${diff >= 0 ? '+' : ''}${diff.toFixed(0)})`);
+                symMap[sym] = (symMap[sym] || 0) + diff;
             }
+            // grouped & sorted highest → lowest
+            const grouped = Object.entries(symMap).map(([sym, diff]) => ({ sym, diff })).sort((a, b) => b.diff - a.diff);
             const diffCol  = totalDiffDay >= 0 ? 'var(--green)' : 'var(--red)';
             const diffSign = totalDiffDay >= 0 ? '+' : '';
             const diffStr  = `${diffSign}$${Math.abs(totalDiffDay) >= 1000 ? compact(totalDiffDay) : totalDiffDay.toFixed(2)}`;
+            // store data in global map keyed by portKey so onclick can retrieve it safely
+            const popupKey = key + '_diffday';
+            window._diffDayData = window._diffDayData || {};
+            window._diffDayData[popupKey] = grouped;
             diffDayCard = `
-                <div class="currency-card" style="border-color:${totalDiffDay>=0?'rgba(16,185,129,0.35)':'rgba(239,68,68,0.35)'}">
+                <div class="currency-card" style="border-color:${totalDiffDay>=0?'rgba(16,185,129,0.35)':'rgba(239,68,68,0.35)'};cursor:pointer;user-select:none" onclick="showDiffDayPopup(event,'${popupKey}')">
                     <div class="cur-label" style="color:${diffCol}">📊 Diff/Day (ACC)</div>
                     <div class="cur-amount" style="color:${diffCol}">${diffStr}</div>
                     <div class="cur-full">${accs.length} accumulators</div>
@@ -3377,6 +3392,50 @@ function renderWatermarkSection(key, portId) {
             </div>
         </div>`;
 }
+
+function showDiffDayPopup(event, popupKey) {
+    event.stopPropagation();
+    const popup = document.getElementById('diffDayPopup');
+    const rows  = document.getElementById('diffDayPopupRows');
+    const data  = (window._diffDayData && window._diffDayData[popupKey]) || [];
+
+    if (!data.length) {
+        rows.innerHTML = '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:6px 0">ยังไม่มีข้อมูลราคา</div>';
+    } else {
+        rows.innerHTML = data.map((l, i) => {
+            const col  = l.diff >= 0 ? 'var(--green)' : 'var(--red)';
+            const sign = l.diff >= 0 ? '+' : '';
+            const fmt  = `${sign}$${Math.abs(l.diff) >= 1000 ? compact(l.diff) : Math.round(l.diff).toLocaleString('en')}`;
+            const border = i < data.length - 1 ? 'border-bottom:1px solid rgba(255,255,255,0.06)' : '';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${border}">
+                <div style="font-size:13px;font-weight:700;color:var(--text)">${l.sym}</div>
+                <div style="font-size:14px;font-weight:800;color:${col}">${fmt}</div>
+            </div>`;
+        }).join('');
+    }
+
+    // Position popup beside the card (prefer right side, fallback left)
+    const card = event.currentTarget;
+    const rect = card.getBoundingClientRect();
+    const pw   = 280;
+    const gap  = 10;
+    popup.style.display = 'block';
+    const ph = popup.offsetHeight;
+
+    let left = rect.right + gap;
+    if (left + pw > window.innerWidth - 8) left = rect.left - pw - gap;
+    let top  = rect.top + (rect.height / 2) - (ph / 2);
+    top = Math.max(8, Math.min(top, window.innerHeight - ph - 8));
+
+    popup.style.left = left + 'px';
+    popup.style.top  = top  + 'px';
+}
+
+// Close popup when clicking outside
+document.addEventListener('click', e => {
+    const popup = document.getElementById('diffDayPopup');
+    if (popup && !popup.contains(e.target)) popup.style.display = 'none';
+});
 
 function editWatermark(key) {
     const p = ensureExtPortfolio(key);

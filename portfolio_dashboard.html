@@ -1831,12 +1831,17 @@ function save(mode = 'structure') {
         S._v = (S._v || 0) + 1;
         _setUnsaved(true);   // ← show indicator: มีการแก้ไขที่ยังไม่ได้ Save
     }
-    if (fxRates && Object.keys(fxRates).length > 1 && fxRates.USD) {
-        S.lastFxRates = { ...fxRates };
-        // Also cache FX separately so it survives even if pfdata is replaced by cloud pull
-        localStorage.setItem('lastFxRatesCache', JSON.stringify({ ...fxRates, _ts: Date.now() }));
+    try {
+        if (fxRates && Object.keys(fxRates).length > 1 && fxRates.USD) {
+            S.lastFxRates = { ...fxRates };
+            // Also cache FX separately so it survives even if pfdata is replaced by cloud pull
+            localStorage.setItem('lastFxRatesCache', JSON.stringify({ ...fxRates, _ts: Date.now() }));
+        }
+        localStorage.setItem('pfdata', JSON.stringify(S));
+    } catch(e) {
+        console.warn('[save] localStorage failed:', e);
+        // Don't throw — in-memory state is still updated; cloud push may still work
     }
-    localStorage.setItem('pfdata', JSON.stringify(S));
     cloudSave(mode);
 }
 
@@ -2349,14 +2354,18 @@ function saveLiability() {
     };
     if (id) { const idx=S.liabilities.findIndex(x=>x.id===id); if(idx>=0) S.liabilities[idx]=l; }
     else S.liabilities.push(l);
-    save(); renderAll(); closeModal('liabilityModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[saveLiability] render error:', e); }
+    closeModal('liabilityModal');
 }
 
 function deleteLiability() {
     const id = document.getElementById('editLiabilityId').value; if (!id) return;
     if (!confirm('ลบรายการหนี้นี้?')) return;
     S.liabilities = S.liabilities.filter(l=>l.id!==id);
-    save(); renderAll(); closeModal('liabilityModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[deleteLiability] render error:', e); }
+    closeModal('liabilityModal');
 }
 
 // ═══════════════════════════════════════
@@ -2923,6 +2932,15 @@ const EXT_PORTS = {
 
 function ensureExtPortfolio(key) {
     const cfg = EXT_PORTS[key];
+    // If key is invalid/unknown, try to find the portfolio by extKey only
+    if (!cfg) {
+        const p = S.portfolios.find(p => p.extKey === key);
+        if (p) return p;
+        // Can't create a portfolio for an unknown key — return a stub to avoid crash
+        console.warn('[ensureExtPortfolio] Unknown key:', key);
+        const stub = S.portfolios[0] || { id: 'unknown', name: 'Unknown', portfolios: [] };
+        return stub;
+    }
     // Support legacy isDike flag for 'dike' key
     let p = S.portfolios.find(p => p.extKey === key || (key === 'dike' && p.isDike));
     // Fallback: match existing portfolio by name (e.g. HSBC already created as own portfolio)
@@ -3638,9 +3656,10 @@ function saveOption() {
         S.holdings.push(optionObj);
     }
     save();
-    save();
-    const key = document.getElementById('optionPortKey').value;
-    if (key) renderExtPage(key); else { renderHoldingsList(); renderPortOptionsSection(); }
+    try {
+        const key = document.getElementById('optionPortKey').value;
+        if (key) renderExtPage(key); else { renderHoldingsList(); renderPortOptionsSection(); }
+    } catch(e) { console.warn('[saveOption] render error:', e); }
     closeModal('optionModal');
 }
 
@@ -3778,7 +3797,9 @@ function saveAccDec() {
             qty: 0, price: 0, currentPrice: 0, exchange: 'MANUAL',
         });
     }
-    save(); renderExtPage(key); closeModal('accDecModal');
+    save();
+    try { renderExtPage(key); } catch(e) { console.warn('[saveAccDec] render error:', e); }
+    closeModal('accDecModal');
 }
 
 function deleteAccDec() {
@@ -4162,7 +4183,9 @@ function saveFCN() {
     };
     if (editId) { const i = S.holdings.findIndex(x => x.id === editId); if (i >= 0) S.holdings[i] = obj; }
     else S.holdings.push(obj);
-    save(); renderExtPage(key); closeModal('fcnModal');
+    save();
+    try { renderExtPage(key); } catch(e) { console.warn('[saveFCN] render error:', e); }
+    closeModal('fcnModal');
 }
 
 function deleteFCN() {
@@ -4171,7 +4194,9 @@ function deleteFCN() {
     const h = S.holdings.find(x => x.id === id);
     const key = h ? (S.portfolios.find(p => p.id === h.portfolioId)?.extKey || '') : '';
     S.holdings = S.holdings.filter(x => x.id !== id);
-    save(); if (key) renderExtPage(key); closeModal('fcnModal');
+    save();
+    try { if (key) renderExtPage(key); } catch(e) { console.warn('[deleteFCN] render error:', e); }
+    closeModal('fcnModal');
 }
 
 function renderFCNList(key, portId, elOverride = null) {
@@ -5979,14 +6004,18 @@ function saveHolding() {
     if (id) { const idx=S.holdings.findIndex(x=>x.id===id); if(idx>=0) S.holdings[idx]=h; }
     else S.holdings.push(h);
 
-    save(); renderAll(); closeModal('holdingModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[saveHolding] render error:', e); }
+    closeModal('holdingModal');
 }
 
 function deleteHolding() {
     const id = document.getElementById('editHoldingId').value; if (!id) return;
     if (!confirm('ลบสินทรัพย์นี้?')) return;
     S.holdings = S.holdings.filter(h=>h.id!==id);
-    save(); renderAll(); closeModal('holdingModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[deleteHolding] render error:', e); }
+    closeModal('holdingModal');
 }
 
 // ─── PORTFOLIO MODAL ───
@@ -6036,7 +6065,9 @@ function savePortfolio() {
                 ...(prev?.isDike ? { isDike: true } : {}) };
     if (id) { const idx=S.portfolios.findIndex(x=>x.id===id); if(idx>=0) S.portfolios[idx]=p; }
     else S.portfolios.push(p);
-    save(); renderAll(); closeModal('portfolioModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[savePortfolio] render error:', e); }
+    closeModal('portfolioModal');
 }
 
 function deletePortfolio() {
@@ -6046,7 +6077,9 @@ function deletePortfolio() {
     if (!confirm(msg)) return;
     S.portfolios = S.portfolios.filter(p=>p.id!==id);
     S.holdings   = S.holdings.filter(h=>h.portfolioId!==id);
-    save(); renderAll(); closeModal('portfolioModal');
+    save();
+    try { renderAll(); } catch(e) { console.warn('[deletePortfolio] render error:', e); }
+    closeModal('portfolioModal');
 }
 
 // ═══════════════════════════════════════

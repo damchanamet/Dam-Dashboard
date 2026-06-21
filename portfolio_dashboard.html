@@ -3480,7 +3480,7 @@ function showDiffDayPopup(event, popupKey) {
         }).join('');
     }
 
-    // Position popup beside the card (prefer right side, fallback left)
+    // Position popup: beside card on desktop, below/above card on mobile
     const card = event.currentTarget;
     const rect = card.getBoundingClientRect();
     const pw   = 280;
@@ -3488,10 +3488,21 @@ function showDiffDayPopup(event, popupKey) {
     popup.style.display = 'block';
     const ph = popup.offsetHeight;
 
-    let left = rect.right + gap;
-    if (left + pw > window.innerWidth - 8) left = rect.left - pw - gap;
-    let top  = rect.top + (rect.height / 2) - (ph / 2);
-    top = Math.max(8, Math.min(top, window.innerHeight - ph - 8));
+    let left, top;
+    if (window.innerWidth < 500) {
+        // Mobile: center horizontally, show below card (or above if no room)
+        left = Math.max(8, (window.innerWidth - pw) / 2);
+        top  = rect.bottom + gap;
+        if (top + ph > window.innerHeight - 8) top = rect.top - ph - gap;
+    } else {
+        // Desktop: prefer right side, fallback left
+        left = rect.right + gap;
+        if (left + pw > window.innerWidth - 8) left = rect.left - pw - gap;
+        top  = rect.top + (rect.height / 2) - (ph / 2);
+    }
+    // Final clamp — always stay within viewport
+    left = Math.max(8, Math.min(left, window.innerWidth  - pw - 8));
+    top  = Math.max(8, Math.min(top,  window.innerHeight - ph - 8));
 
     popup.style.left = left + 'px';
     popup.style.top  = top  + 'px';

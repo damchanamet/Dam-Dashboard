@@ -810,16 +810,16 @@ body {
             <!-- NOT CONNECTED -->
             <div id="cloudSetupView">
                 <div style="padding:4px 0 16px;border-bottom:1px solid var(--border);margin-bottom:14px">
-                    <div class="settings-row-label" style="margin-bottom:4px">JSONBin <span style="font-size:11px;font-weight:400;color:var(--text-muted)">— เปิดได้จากทุกเครื่อง ฟรี</span></div>
-                    <div class="settings-row-sub" style="margin-bottom:12px">1. สมัครที่ <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a> → API Keys → copy <strong>Secret Key</strong><br>2. วางด้านล่าง แล้วกด <strong>เชื่อมต่อ</strong></div>
-                    <input id="jbKeyInput" type="password" placeholder="Secret Key: $2a$10$…"
+                    <div class="settings-row-label" style="margin-bottom:4px">GitHub Gist <span style="font-size:11px;font-weight:400;color:var(--text-muted)">— เปิดได้จากทุกเครื่อง ฟรีตลอด</span></div>
+                    <div class="settings-row-sub" style="margin-bottom:12px">1. ไปที่ <a href="https://github.com/settings/tokens/new?scopes=gist&description=Portfolio+Dashboard" target="_blank" style="color:var(--accent)">github.com → Settings → Tokens (classic)</a><br>2. เลือก scope <strong>gist</strong> แล้วกด Generate → copy Token<br>3. วางด้านล่าง แล้วกด <strong>เชื่อมต่อ</strong></div>
+                    <input id="jbKeyInput" type="password" placeholder="GitHub Token: ghp_…"
                         style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px;margin-bottom:8px">
                     <input id="jbSyncCodeInput" placeholder="Sync Code (เว้นว่างถ้าเป็นเครื่องแรก)"
                         style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px;margin-bottom:10px">
                     <button id="cloudConnectBtn" onclick="setupCloud()" style="width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">☁️ เชื่อมต่อ Cloud</button>
                 </div>
                 <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-                    💡 เครื่องแรก: ใส่แค่ Secret Key → ระบบสร้าง bin ให้อัตโนมัติ แล้ว copy <strong>Sync Code</strong> ไปเปิดบนเครื่องอื่น
+                    💡 เครื่องแรก: ใส่แค่ GitHub Token → ระบบสร้าง Gist ให้อัตโนมัติ แล้ว copy <strong>Sync Code</strong> ไปเปิดบนเครื่องอื่น
                 </div>
             </div>
 
@@ -1490,7 +1490,7 @@ body {
     <div class="form-row">
         <div class="form-group">
             <label class="form-label">พอร์ต</label>
-            <select class="form-select" id="liabilityPortfolio"></select>
+            <select class="form-select" id="liabilityPortfolio" onchange="onLiabilityPortfolioChange()"></select>
         </div>
         <div class="form-group">
             <label class="form-label">สกุลเงิน</label>
@@ -1846,7 +1846,7 @@ function save(mode = 'structure') {
 }
 
 // ═══════════════════════════════════════
-//  CLOUD SYNC (JSONBin)
+//  CLOUD SYNC (GitHub Gist)
 // ═══════════════════════════════════════
 let _cloudTimer   = null;
 let _cloudSyncing = false;
@@ -1862,7 +1862,7 @@ function _setUnsaved(val) {
 }
 
 function _cloudCfg() {
-    return { key: localStorage.getItem('jb_key') || '', id: localStorage.getItem('jb_id') || '' };
+    return { key: localStorage.getItem('gh_token') || '', id: localStorage.getItem('gh_gist_id') || '' };
 }
 function _cloudEnabled() { const c = _cloudCfg(); return !!(c.key && c.id); }
 
@@ -1884,12 +1884,18 @@ async function cloudLoad() {
     const { key, id } = _cloudCfg();
     if (!key || !id) return false;
     try {
-        const res = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
-            headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
-            signal: AbortSignal.timeout(8000)   // ← timeout (was missing before!)
+        const res = await fetch(`https://api.github.com/gists/${id}`, {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+                'Accept': 'application/vnd.github+json'
+            },
+            signal: AbortSignal.timeout(8000)
         });
         if (!res.ok) return false;
-        const data = await res.json();
+        const gist = await res.json();
+        const content = gist.files?.['portfolio.json']?.content;
+        if (!content) return false;
+        const data = JSON.parse(content);
         if (data && data.portfolios) {
             const cloudV = data._v || 0;
             const localV = S._v   || 0;
@@ -1926,12 +1932,18 @@ async function _cloudPullIfNewer() {
     const { key, id } = _cloudCfg();
     if (!key || !id) return false;
     try {
-        const res = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
-            headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
+        const res = await fetch(`https://api.github.com/gists/${id}`, {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+                'Accept': 'application/vnd.github+json'
+            },
             signal: AbortSignal.timeout(7000)
         });
         if (!res.ok) return false;
-        const data = await res.json();
+        const gist = await res.json();
+        const content = gist.files?.['portfolio.json']?.content;
+        if (!content) return false;
+        const data = JSON.parse(content);
         if (data && data.portfolios) {
             const cloudV = data._v || 0;
             const localV = S._v   || 0;
@@ -1972,40 +1984,51 @@ async function _cloudPush() {
         // Otherwise Mac's price refresh would overwrite iPhone's portfolio edits.
         if (_pendingSaveMode === 'priceOnly') {
             try {
-                const chkRes = await fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
-                    headers: { 'X-Master-Key': key, 'X-Bin-Meta': 'false' },
+                const chkRes = await fetch(`https://api.github.com/gists/${id}`, {
+                    headers: {
+                        'Authorization': `Bearer ${key}`,
+                        'Accept': 'application/vnd.github+json'
+                    },
                     signal: AbortSignal.timeout(6000)
                 });
                 if (chkRes.ok) {
-                    const cloudData = await chkRes.json();
-                    const cloudV = cloudData?._v || 0;
-                    const localV = S._v || 0;
-                    if (cloudV > localV && cloudData?.portfolios) {
-                        // Cloud has newer structure (edited on another device)
-                        // Apply cloud's structure but overlay our fresh prices
-                        const priceMap = {};
-                        S.holdings.forEach(h => {
-                            if (h.currentPrice && h.lastFetch) priceMap[h.id] = { currentPrice: h.currentPrice, lastFetch: h.lastFetch };
-                        });
-                        S = { ...cloudData };
-                        S.portfolios  = S.portfolios  || [];
-                        S.holdings    = (S.holdings || []).map(h => ({ ...h, ...(priceMap[h.id] || {}) }));
-                        S.liabilities = S.liabilities || [];
-                        S.snapshots   = S.snapshots   || [];
-                        if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
-                        S._lastModified = Date.now();
-                        _syncVCFromS();
-                        localStorage.setItem('pfdata', JSON.stringify(S));
-                        renderAll(); // show merged data immediately
+                    const chkGist = await chkRes.json();
+                    const chkContent = chkGist.files?.['portfolio.json']?.content;
+                    if (chkContent) {
+                        const cloudData = JSON.parse(chkContent);
+                        const cloudV = cloudData?._v || 0;
+                        const localV = S._v || 0;
+                        if (cloudV > localV && cloudData?.portfolios) {
+                            // Cloud has newer structure (edited on another device)
+                            // Apply cloud's structure but overlay our fresh prices
+                            const priceMap = {};
+                            S.holdings.forEach(h => {
+                                if (h.currentPrice && h.lastFetch) priceMap[h.id] = { currentPrice: h.currentPrice, lastFetch: h.lastFetch };
+                            });
+                            S = { ...cloudData };
+                            S.portfolios  = S.portfolios  || [];
+                            S.holdings    = (S.holdings || []).map(h => ({ ...h, ...(priceMap[h.id] || {}) }));
+                            S.liabilities = S.liabilities || [];
+                            S.snapshots   = S.snapshots   || [];
+                            if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+                            S._lastModified = Date.now();
+                            _syncVCFromS();
+                            localStorage.setItem('pfdata', JSON.stringify(S));
+                            renderAll(); // show merged data immediately
+                        }
                     }
                 }
             } catch(e) { /* merge check failed — push as-is */ }
         }
 
-        const res = await fetch(`https://api.jsonbin.io/v3/b/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json', 'X-Master-Key': key },
-            body: JSON.stringify(S)
+        const res = await fetch(`https://api.github.com/gists/${id}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${key}`,
+                'Accept': 'application/vnd.github+json'
+            },
+            body: JSON.stringify({ files: { 'portfolio.json': { content: JSON.stringify(S) } } })
         });
         _cloudSyncing = false;
         _cloudError = !res.ok;
@@ -2064,10 +2087,14 @@ async function saveAndSync() {
                 label.textContent = 'ลองใหม่อีกครั้ง…';
                 await new Promise(r => setTimeout(r, 1500)); // brief pause before retry
             }
-            const res = await fetch(`https://api.jsonbin.io/v3/b/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json', 'X-Master-Key': key },
-                body,
+            const res = await fetch(`https://api.github.com/gists/${id}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${key}`,
+                    'Accept': 'application/vnd.github+json'
+                },
+                body: JSON.stringify({ files: { 'portfolio.json': { content: body } } }),
                 signal: AbortSignal.timeout(15000)
             });
             if (res.ok) {
@@ -2083,9 +2110,9 @@ async function saveAndSync() {
                 return;
             }
             // HTTP error — decode reason
-            if (res.status === 401) lastErr = 'API Key ไม่ถูกต้อง';
-            else if (res.status === 404) lastErr = 'ไม่พบ Bin — ตรวจ Sync Code';
-            else if (res.status === 429) lastErr = 'เกิน API quota วันนี้';
+            if (res.status === 401) lastErr = 'Token ไม่ถูกต้องหรือหมดอายุ';
+            else if (res.status === 404) lastErr = 'ไม่พบ Gist — ตรวจ Sync Code';
+            else if (res.status === 403) lastErr = 'Token ไม่มี permission gist';
             else lastErr = `Server error (${res.status})`;
         } catch(e) {
             if (e?.name === 'TimeoutError' || e?.name === 'AbortError') lastErr = 'หมดเวลา — internet ช้าหรือขาด';
@@ -2144,51 +2171,57 @@ async function setupCloud() {
     const key        = keyEl?.value.trim();
     const syncRaw    = syncCodeEl?.value.trim();
 
-    if (!key) { alert('กรุณาใส่ Secret Key จาก JSONBin'); return; }
+    if (!key) { alert('กรุณาใส่ GitHub Personal Access Token'); return; }
     if (btn) { btn.textContent = '⏳ กำลังเชื่อมต่อ…'; btn.disabled = true; }
 
     const reset = () => { if (btn) { btn.textContent = '☁️ เชื่อมต่อ Cloud'; btn.disabled = false; } };
 
     if (syncRaw) {
-        // Existing bin — decode sync code or treat as raw bin ID
-        const parsed = _parseSyncCode(syncRaw);
-        const binId  = parsed ? parsed.id : syncRaw;
-        localStorage.setItem('jb_key', key);
-        localStorage.setItem('jb_id',  binId);
+        // Existing gist — decode sync code or treat as raw gist ID
+        const parsed  = _parseSyncCode(syncRaw);
+        const gistId  = parsed ? parsed.id : syncRaw;
+        localStorage.setItem('gh_token',   key);
+        localStorage.setItem('gh_gist_id', gistId);
         const ok = await cloudLoad();
         if (ok) {
             renderAll();
             _initCloudUI();
         } else {
-            localStorage.removeItem('jb_key');
-            localStorage.removeItem('jb_id');
+            localStorage.removeItem('gh_token');
+            localStorage.removeItem('gh_gist_id');
             reset();
-            alert('โหลดข้อมูลไม่ได้ — ตรวจสอบ Secret Key และ Sync Code อีกครั้ง');
+            alert('โหลดข้อมูลไม่ได้ — ตรวจสอบ Token และ Sync Code อีกครั้ง');
         }
     } else {
-        // Create new bin
+        // Create new gist
         try {
-            const res = await fetch('https://api.jsonbin.io/v3/b', {
+            const res = await fetch('https://api.github.com/gists', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Master-Key': key,
-                    'X-Bin-Name':   'portfolio-dashboard',
-                    'X-Bin-Private':'true'
+                    'Authorization': `Bearer ${key}`,
+                    'Accept': 'application/vnd.github+json'
                 },
-                body: JSON.stringify(S)
+                body: JSON.stringify({
+                    description: 'Portfolio Dashboard Data',
+                    public: false,
+                    files: { 'portfolio.json': { content: JSON.stringify(S) } }
+                })
             });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const json  = await res.json();
-            const binId = json.metadata?.id;
-            if (!binId) throw new Error('No bin ID in response');
-            localStorage.setItem('jb_key', key);
-            localStorage.setItem('jb_id',  binId);
+            if (!res.ok) {
+                const errJson = await res.json().catch(() => ({}));
+                throw new Error(`HTTP ${res.status}: ${errJson.message || ''}`);
+            }
+            const json   = await res.json();
+            const gistId = json.id;
+            if (!gistId) throw new Error('No gist ID in response');
+            localStorage.setItem('gh_token',   key);
+            localStorage.setItem('gh_gist_id', gistId);
             localStorage.setItem('jb_lastSync', new Date().toISOString());
             _initCloudUI();
         } catch(e) {
             reset();
-            alert('สร้าง bin ไม่ได้ — ตรวจสอบ Secret Key อีกครั้ง\n' + e.message);
+            alert('สร้าง Gist ไม่ได้ — ตรวจสอบ Token อีกครั้ง\n' + e.message);
         }
     }
 }
@@ -2207,8 +2240,8 @@ function copySyncCode() {
 
 function disconnectCloud() {
     if (!confirm('ยกเลิกการเชื่อมต่อ Cloud?\nข้อมูลในเครื่องนี้ยังคงอยู่')) return;
-    localStorage.removeItem('jb_key');
-    localStorage.removeItem('jb_id');
+    localStorage.removeItem('gh_token');
+    localStorage.removeItem('gh_gist_id');
     localStorage.removeItem('jb_lastSync');
     _initCloudUI();
 }
@@ -2302,6 +2335,20 @@ function renderLiabilitiesList() {
     }).join('');
 }
 
+// ─── Auto-set liability currency based on selected portfolio ───
+function onLiabilityPortfolioChange() {
+    const sel = document.getElementById('liabilityPortfolio');
+    const port = S.portfolios.find(p => p.id === sel.value);
+    if (!port) return;
+    const nameLC = (port.name || '').toLowerCase();
+    // USD-default portfolios: Moomoo, HSBC, Citi
+    if (/moomoo|hsbc|citi/.test(nameLC)) {
+        document.getElementById('liabilityCurrency').value = 'USD';
+    } else {
+        document.getElementById('liabilityCurrency').value = 'THB';
+    }
+}
+
 // ─── Open add/edit liability modal ───
 function openAddLiability() {
     document.getElementById('liabilityModalTitle').textContent = 'เพิ่มหนี้';
@@ -2310,11 +2357,12 @@ function openAddLiability() {
     document.getElementById('liabilityAmount').value   = '';
     document.getElementById('liabilityRate').value     = '';
     document.getElementById('liabilityNote').value     = '';
-    document.getElementById('liabilityCurrency').value = 'THB';
     document.getElementById('btnDeleteLiability').style.display = 'none';
     const sel = document.getElementById('liabilityPortfolio');
     sel.innerHTML = S.portfolios.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
     if (curFilter !== 'all' && S.portfolios.find(p=>p.id===curFilter)) sel.value = curFilter;
+    // Auto-set currency based on selected portfolio
+    onLiabilityPortfolioChange();
     openModal('liabilityModal');
 }
 
@@ -4607,11 +4655,20 @@ function renderSummary() {
 
     // ── 2. Total assets, liabilities, and net worth (all in THB) ──
     const totalAssetsThb = myData.reduce((s, h) => s + (h.thbVal || 0), 0);
-    // Only count liabilities from non-excluded portfolios (excluded ports like Port Coke
-    // are self-contained and their liabilities should not reduce the main Net Worth)
-    const ownPortIds = new Set(S.portfolios.filter(p => !p.excludeFromTotal).map(p => p.id));
+    // Exclude liabilities ONLY from "other people's" ext portfolios (dike/dew/big/coke/good)
+    // Regular user portfolios (Moomoo etc.) and HSBC (includeInTotal:true) always count.
+    const otherPeoplePortIds = new Set(
+        S.portfolios
+            .filter(p => {
+                if (!p.extKey) return false;          // regular user portfolio → always count
+                const cfg = EXT_PORTS[p.extKey];
+                if (!cfg) return false;               // unknown extKey → include to be safe
+                return !cfg.includeInTotal;            // exclude only "managed for others" ports
+            })
+            .map(p => p.id)
+    );
     const totalLiabThb = S.liabilities
-        .filter(l => !l.portfolioId || ownPortIds.has(l.portfolioId))
+        .filter(l => !l.portfolioId || !otherPeoplePortIds.has(l.portfolioId))
         .reduce((sum, l) => {
             const amt = parseFloat(l.amount) || 0;
             const cur = l.currency || 'THB';
@@ -5469,10 +5526,18 @@ function saveSnapshot(opts = {}) {
         const cur   = (h.currency&&h.currency!=='AUTO') ? h.currency : 'USD';
         return s + toTHB(price*qty, cur);
     }, 0);
-    // Only count liabilities from non-excluded portfolios
-    const ownPortIdsSnap = new Set(S.portfolios.filter(p => !p.excludeFromTotal).map(p => p.id));
+    // Exclude liabilities only from "other people's" ext portfolios (same logic as renderSummary)
+    const otherPeoplePortIdsSnap = new Set(
+        S.portfolios
+            .filter(p => {
+                if (!p.extKey) return false;
+                const cfg = EXT_PORTS[p.extKey];
+                return cfg && !cfg.includeInTotal;
+            })
+            .map(p => p.id)
+    );
     const mainLiab = S.liabilities
-        .filter(l => !l.portfolioId || ownPortIdsSnap.has(l.portfolioId))
+        .filter(l => !l.portfolioId || !otherPeoplePortIdsSnap.has(l.portfolioId))
         .reduce((sum, l) => {
             const amt = parseFloat(l.amount) || 0;
             const cur = l.currency || 'THB';

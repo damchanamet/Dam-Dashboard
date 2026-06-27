@@ -1804,6 +1804,15 @@ async function init() {
     renderAll();
     _initCloudUI();
     updateNotifUI();
+    // Auto-connect for client devices: if Sync Code is embedded and cloud not yet configured
+    if (!_cloudEnabled() && CLIENT_AUTO_SYNC) {
+        const parsed = _parseSyncCode(CLIENT_AUTO_SYNC);
+        if (parsed && parsed.key && parsed.id) {
+            localStorage.setItem('gh_token',   parsed.key);
+            localStorage.setItem('gh_gist_id', parsed.id);
+            _initCloudUI();
+        }
+    }
     // If cloud is configured, pull latest data (may be newer than local cache)
     if (_cloudEnabled()) {
         const loaded = await cloudLoad();
@@ -2968,6 +2977,11 @@ function renderVCPage() {
     document.getElementById('vcFundCards').innerHTML = html;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// CLIENT AUTO-SYNC: ใส่ Sync Code ด้านล่างก่อนส่งไฟล์ให้ client
+// client จะ auto-connect โดยไม่ต้องตั้งค่าอะไรเอง
+// (เว้นว่างไว้ถ้าเป็นไฟล์ของ Dam เอง)
+const CLIENT_AUTO_SYNC = '';
 // ──────────────────────────────────────────────────────────────────────────────
 const EXT_PORTS = {
     dike: { name: 'Port Dike', color: '#f59e0b', myShare: 50, icon: '🏦' },

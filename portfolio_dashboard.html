@@ -377,7 +377,7 @@ body {
             <div class="net-divider" id="netFeeDivider" style="display:none"></div>
             <div class="net-item" id="netFeeItem" style="display:none">
                 <div class="net-item-label">ค่า Fee</div>
-                <div class="net-item-val" id="netFee" style="color:#f97316">—</div>
+                <div class="net-item-val" id="netFee" style="color:var(--green)">—</div>
             </div>
         </div>
         <div class="tc-sub" id="totalTHBSub" style="margin-top:10px">ยังไม่มีข้อมูล</div>
@@ -3463,9 +3463,9 @@ function renderWatermarkSection(key, portId) {
                 <div style="font-size:15px;font-weight:700;color:${diffCol}">${wm > 0 ? diffSign + '$ ' + Math.round(Math.abs(aboveWm)).toLocaleString('en') : '—'}</div>
                 ${wm > 0 ? `<div style="font-size:22px;font-weight:800;color:${diffCol};line-height:1.1;margin-top:2px">${diffSign}${pctDiff.toFixed(1)}%</div>` : ''}
             </div>
-            <div style="background:${estFee > 0 ? 'rgba(244,63,94,0.12)' : 'rgba(255,255,255,0.04)'};border-radius:10px;padding:10px 6px;border:${estFee > 0 ? '1px solid rgba(244,63,94,0.3)' : 'none'}">
+            <div style="background:${estFee > 0 ? 'rgba(16,185,129,0.12)' : 'rgba(255,255,255,0.04)'};border-radius:10px;padding:10px 6px;border:${estFee > 0 ? '1px solid rgba(16,185,129,0.3)' : 'none'}">
                 <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Est. Fee ${feeRate}%</div>
-                <div style="font-size:15px;font-weight:700;color:${estFee > 0 ? '#f43f5e' : 'var(--text-muted)'}">
+                <div style="font-size:15px;font-weight:700;color:${estFee > 0 ? 'var(--green)' : 'var(--text-muted)'}">
                     ${estFee > 0 ? '฿ ' + Math.round(estFee * usdRate).toLocaleString('en') : '—'}
                 </div>
                 ${estFee > 0 ? `<div style="font-size:10px;color:var(--text-muted)">≈ $ ${Math.round(estFee).toLocaleString('en')}</div>` : ''}
@@ -5521,6 +5521,7 @@ function renderHistChart() {
         options: {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode:'index', intersect:false },
+            layout: { padding: { left: 8 } },
             plugins: {
                 legend: { display: false },
                 tooltip: { callbacks: { label: c => ` ฿ ${Math.round(c.parsed.y).toLocaleString('en')}` } }
@@ -5528,8 +5529,16 @@ function renderHistChart() {
             scales: {
                 x: { ticks:{color:'#8891b8',font:{size:10}}, grid:{color:'rgba(255,255,255,0.05)'} },
                 y: {
-                    ticks:{color:'#8891b8',font:{size:10},callback:v=>'฿'+compact(v)},
-                    grid:{color:'rgba(255,255,255,0.05)'}
+                    ticks:{
+                        color:'#8891b8', font:{size:10},
+                        callback: v => {
+                            if (v >= 1e6) return '฿' + Math.round(v/1e6) + 'M';
+                            if (v >= 1e3) return '฿' + Math.round(v/1e3) + 'K';
+                            return '฿' + Math.round(v).toLocaleString('en');
+                        }
+                    },
+                    grid:{color:'rgba(255,255,255,0.05)'},
+                    afterFit: axis => { axis.width = Math.max(axis.width, 58); }
                 }
             }
         }

@@ -5521,7 +5521,6 @@ function renderHistChart() {
         options: {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode:'index', intersect:false },
-            layout: { padding: { left: 8 } },
             plugins: {
                 legend: { display: false },
                 tooltip: { callbacks: { label: c => ` ฿ ${Math.round(c.parsed.y).toLocaleString('en')}` } }
@@ -5531,6 +5530,7 @@ function renderHistChart() {
                 y: {
                     ticks:{
                         color:'#8891b8', font:{size:10},
+                        padding: 10,
                         callback: v => {
                             if (v >= 1e6) return '฿' + Math.round(v/1e6) + 'M';
                             if (v >= 1e3) return '฿' + Math.round(v/1e3) + 'K';
@@ -5538,7 +5538,7 @@ function renderHistChart() {
                         }
                     },
                     grid:{color:'rgba(255,255,255,0.05)'},
-                    afterFit: axis => { axis.width = Math.max(axis.width, 58); }
+                    afterFit: axis => { axis.width = Math.max(axis.width, 72); }
                 }
             }
         }

@@ -2044,6 +2044,11 @@ async function _cloudPush() {
         if (res.ok) {
             _cloudDirty = false;
             localStorage.setItem('jb_lastSync', new Date().toISOString());
+        } else if (res.status === 401 || res.status === 403) {
+            // Token invalid/expired — don't retry, show clear error
+            console.warn('[sync] Token error', res.status, '— stopping retries');
+            const badge = document.getElementById('cloudStatusBadge');
+            if (badge) { badge.textContent = '🔑 Token หมดอายุ — ตั้งค่าใหม่'; badge.style.color = 'var(--red)'; }
         } else {
             setTimeout(_cloudPush, 5000);
         }
@@ -2191,6 +2196,27 @@ async function setupCloud() {
         const gistId  = parsed ? parsed.id : syncRaw;
         localStorage.setItem('gh_token',   key);
         localStorage.setItem('gh_gist_id', gistId);
+        // Test connection directly to get specific error
+        let diagMsg = '';
+        try {
+            const testRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+                headers: { 'Authorization': `Bearer ${key}`, 'Accept': 'application/vnd.github+json' },
+                signal: AbortSignal.timeout(10000)
+            });
+            if (!testRes.ok) {
+                const errJson = await testRes.json().catch(() => ({}));
+                diagMsg = `HTTP ${testRes.status}: ${errJson.message || ''}`;
+            }
+        } catch(e) {
+            diagMsg = e?.name === 'TimeoutError' ? 'หมดเวลา (Timeout)' : 'ไม่มี internet หรือ network error';
+        }
+        if (diagMsg) {
+            localStorage.removeItem('gh_token');
+            localStorage.removeItem('gh_gist_id');
+            reset();
+            alert('เชื่อมต่อไม่ได้ — ' + diagMsg);
+            return;
+        }
         const ok = await cloudLoad();
         if (ok) {
             renderAll();

@@ -6330,8 +6330,8 @@ async function fetchAllPrices() {
     if (eligible.length || optionUnderlyingSyms.length) {
         // For each holding, derive the Yahoo symbol (null = AUTO mode, needs probing)
         const symFor = h => {
-            if (h.resolvedSymbol) return h.resolvedSymbol;
-            if (h.exchange && h.exchange !== 'AUTO') {
+            // 1. Explicit exchange always wins — ignore any stale cached resolvedSymbol
+            if (h.exchange && h.exchange !== 'AUTO' && h.exchange !== 'MANUAL') {
                 const ex = EXCHANGE_MAP[h.exchange];
                 if (ex) {
                     const base = (h.exchange === 'HK' && /^\d+$/.test(h.symbol))
@@ -6339,10 +6339,13 @@ async function fetchAllPrices() {
                     return base + (ex.suffix || '');
                 }
             }
-            // AUTO + no dot + not all-digits → almost certainly a US ticker (NASDAQ/NYSE)
-            // Include in batch; if batch misses it'll fall through to resolvePrice
             const sym = (h.symbol || '').toUpperCase().trim();
+            // 2. Plain US-style ticker (no dot, not all-digits) → ALWAYS use the bare
+            //    US symbol. Never a stale foreign cache like NVDA.DE (Xetra) / NVDA.PA.
+            //    This also overwrites the bad cache on success (self-healing).
             if (!sym.includes('.') && !/^\d+$/.test(sym)) return sym;
+            // 3. Otherwise trust cached resolved symbol (HK / other foreign markets)
+            if (h.resolvedSymbol) return h.resolvedSymbol;
             return null;
         };
 
@@ -6355,17 +6358,27 @@ async function fetchAllPrices() {
         const extraOptSyms  = optionUnderlyingSyms.filter(s => !knownSymSet.has(s));
         const batchSyms     = [...knownSyms, ...extraOptSyms];
 
-        // Step A: Finnhub + Yahoo batch + Stooq — all parallel
-        // Priority: Finnhub (fast, reliable) > Yahoo (real-time) > Stooq (fallback)
-        const [finnhubResult, batchResult, stooqResult, ...autoResults] = await Promise.all([
-            fetchFinnhubPrices(batchSyms),        // Primary: fast, direct, no proxy
-            fetchYahooBatch(batchSyms),            // Secondary: real-time Yahoo
-            fetchStooqBatch(batchSyms),            // Tertiary: free fallback
+        // Step A: Finnhub + Yahoo (both real-time, correct-market) in parallel.
+        // Stooq is NOT here — it's slow (proxy chain) and returns wrong-market EOD close.
+        const [finnhubResult, batchResult, ...autoResults] = await Promise.all([
+            fetchFinnhubPrices(batchSyms),        // Primary: fast, direct, US real-time
+            fetchYahooBatch(batchSyms),            // Secondary: real-time, respects market suffix
             ...autoHoldings.map(h => resolvePrice(h)),
         ]);
 
-        // Merge: Stooq → Yahoo → Finnhub (Finnhub wins)
-        const combined = { ...stooqResult, ...batchResult, ...finnhubResult };
+        // Merge: Finnhub → Yahoo (Yahoo wins). Yahoo's regularMarketPrice is genuine
+        // real-time and matches broker prices; Finnhub free tier can be delayed/off,
+        // so Finnhub only fills symbols Yahoo didn't return.
+        let combined = { ...finnhubResult, ...batchResult };
+
+        // Stooq fallback ONLY for symbols neither source could resolve.
+        // Keeps the common case fast (~2s) and prevents Stooq's stale wrong-market
+        // prices from overriding correct real-time data.
+        const stillMissing = [...new Set(batchSyms)].filter(s => !combined[s]);
+        if (stillMissing.length) {
+            const stooqResult = await fetchStooqBatch(stillMissing);
+            combined = { ...stooqResult, ...combined };
+        }
 
         // Populate option underlying cache from batch results (free — already fetched)
         for (const sym of optionUnderlyingSyms) {

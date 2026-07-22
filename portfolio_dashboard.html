@@ -83,6 +83,67 @@ body {
 .nav-icon { font-size: 21px; }
 .nav-label { font-size: 10px; }
 
+/* ── POST-IT NOTE ── */
+.note-fab {
+    position: fixed; right: 16px;
+    bottom: calc(84px + var(--safe-bottom));
+    width: 46px; height: 46px; border-radius: 50%;
+    background: rgba(30,37,53,0.92); border: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; cursor: pointer; z-index: 95;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    transition: transform 0.15s, background 0.2s, box-shadow 0.2s;
+}
+.note-fab:active { transform: scale(0.9); }
+/* has a saved note → bright amber */
+.note-fab.has-note {
+    background: #f7d060; border-color: #f0c000;
+    box-shadow: 0 4px 18px rgba(247,208,96,0.55);
+}
+.note-fab .note-dot {
+    position: absolute; top: 4px; right: 4px;
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #ef4444; border: 2px solid #1a1f2e; display: none;
+}
+.note-fab.has-note .note-dot { display: block; }
+
+.postit-overlay {
+    position: fixed; inset: 0; z-index: 9998;
+    background: rgba(0,0,0,0.5); backdrop-filter: blur(3px);
+    display: none; align-items: center; justify-content: center; padding: 24px;
+}
+.postit-overlay.open { display: flex; }
+.postit {
+    width: 100%; max-width: 340px;
+    background: linear-gradient(160deg,#fff2a8 0%,#ffe873 100%);
+    border-radius: 4px; padding: 18px 18px 14px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.5); position: relative;
+    transform: rotate(-1.2deg);
+}
+.postit-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+}
+.postit-title { font-size: 13px; font-weight: 800; color: #8a6d00; letter-spacing: 0.3px; }
+.postit-close { background: none; border: none; font-size: 20px; color: #8a6d00; cursor: pointer; line-height: 1; padding: 0 2px; }
+.postit textarea {
+    width: 100%; box-sizing: border-box; min-height: 150px;
+    background: transparent; border: none; resize: none; outline: none;
+    color: #4a3d00; font-size: 15px; line-height: 1.5;
+    font-family: inherit;
+}
+.postit textarea::placeholder { color: rgba(74,61,0,0.4); }
+.postit-actions { display: flex; gap: 8px; margin-top: 8px; }
+.postit-save {
+    flex: 1; padding: 9px; border: none; border-radius: 7px;
+    background: #4a3d00; color: #ffe873; font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.postit-del {
+    padding: 9px 12px; border: 1px solid rgba(74,61,0,0.3); border-radius: 7px;
+    background: transparent; color: #8a6d00; font-size: 13px; cursor: pointer;
+}
+
 /* ── Pages ── */
 .page {
     display: none;
@@ -498,10 +559,13 @@ body {
 <!-- ══ POPUP: DIFF/DAY BREAKDOWN ══ -->
 <div id="diffDayPopup" style="display:none;position:fixed;z-index:9999;background:#1e2535;border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:14px 16px;min-width:220px;max-width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.6);pointer-events:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px">DIFF/DAY รายตัว</div>
+        <div style="display:flex;align-items:center;gap:7px;min-width:0">
+            <button id="diffDayBackBtn" onclick="diffDayBack()" style="display:none;background:none;border:none;color:var(--text-muted);font-size:15px;cursor:pointer;line-height:1;padding:0">‹</button>
+            <div id="diffDayPopupTitle" style="font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px">DIFF/DAY รายตัว</div>
+        </div>
         <button onclick="document.getElementById('diffDayPopup').style.display='none'" style="background:none;border:none;color:var(--text-muted);font-size:16px;cursor:pointer;line-height:1;padding:0 2px">✕</button>
     </div>
-    <div id="diffDayPopupRows"></div>
+    <div id="diffDayPopupRows" style="max-height:62vh;overflow-y:auto"></div>
 </div>
 
 <!-- ══ MODAL: OPTION ══ -->
@@ -1336,6 +1400,24 @@ body {
         <span class="nav-icon">⚙️</span><span class="nav-label">ตั้งค่า</span>
     </div>
 </nav>
+
+<!-- ══ POST-IT NOTE — floating button + editor ══ -->
+<div class="note-fab" id="noteFab" onclick="openNoteModal()" title="โน้ตของหน้านี้">
+    📝<span class="note-dot"></span>
+</div>
+<div class="postit-overlay" id="postitOverlay" onclick="if(event.target===this)closeNoteModal()">
+    <div class="postit">
+        <div class="postit-head">
+            <div class="postit-title" id="postitTitle">โน้ต</div>
+            <button class="postit-close" onclick="closeNoteModal()">✕</button>
+        </div>
+        <textarea id="postitText" placeholder="จดโน้ตของหน้านี้…"></textarea>
+        <div class="postit-actions">
+            <button class="postit-save" onclick="saveNote()">บันทึก</button>
+            <button class="postit-del" id="postitDel" onclick="deleteNote()" style="display:none">ลบ</button>
+        </div>
+    </div>
+</div>
 
 <!-- ══ MODAL: ADD/EDIT HOLDING ══ -->
 <div class="modal-overlay" id="holdingModal">
@@ -2284,6 +2366,7 @@ function disconnectCloud() {
 // ═══════════════════════════════════════
 //  NAVIGATION
 // ═══════════════════════════════════════
+let _currentPage = 'summary';
 function showPage(name, el) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -2294,6 +2377,52 @@ function showPage(name, el) {
     if (name === 'adjust')  renderAdjustPage();
     if (name === 'vc')      renderVCPage();
     if (EXT_PORTS[name])    renderExtPage(name);
+    _currentPage = name;
+    updateNoteFab();
+}
+
+// ═══════════════════════════════════════
+//  POST-IT NOTES (per page, synced via S.notes)
+// ═══════════════════════════════════════
+const PAGE_TITLES = {
+    summary:'Summary', holdings:'Asset', good:'Port Khun Good', coke:'Port Coke',
+    dike:'Port Dike', dew:'Port Dew', big:'Port Big', hsbc:'HSBC',
+    vc:'VC', adjust:'Adjust', history:'ประวัติ', settings:'ตั้งค่า'
+};
+function updateNoteFab() {
+    const fab = document.getElementById('noteFab');
+    if (!fab) return;
+    const note = (S.notes && S.notes[_currentPage] || '').trim();
+    fab.classList.toggle('has-note', !!note);
+}
+function openNoteModal() {
+    S.notes = S.notes || {};
+    const txt = document.getElementById('postitText');
+    const del = document.getElementById('postitDel');
+    document.getElementById('postitTitle').textContent =
+        'โน้ต · ' + (PAGE_TITLES[_currentPage] || _currentPage);
+    txt.value = S.notes[_currentPage] || '';
+    del.style.display = txt.value.trim() ? 'block' : 'none';
+    document.getElementById('postitOverlay').classList.add('open');
+    setTimeout(() => txt.focus(), 50);
+}
+function closeNoteModal() {
+    document.getElementById('postitOverlay').classList.remove('open');
+}
+function saveNote() {
+    S.notes = S.notes || {};
+    const val = document.getElementById('postitText').value.trim();
+    if (val) S.notes[_currentPage] = val;
+    else     delete S.notes[_currentPage];
+    save();
+    updateNoteFab();
+    closeNoteModal();
+}
+function deleteNote() {
+    if (S.notes) delete S.notes[_currentPage];
+    save();
+    updateNoteFab();
+    closeNoteModal();
 }
 
 // ═══════════════════════════════════════
@@ -2463,6 +2592,7 @@ function renderAll() {
     renderPortAccDecFCNSection();
     renderPortfolioSettings();
     Object.keys(EXT_PORTS).forEach(k => renderExtPage(k));
+    updateNoteFab();
 }
 
 // ═══════════════════════════════════════
@@ -3124,8 +3254,10 @@ function renderExtPage(key) {
     // Currency grid
     const grid = document.getElementById(K + 'CurrencyGrid');
     if (grid) {
-        // Total by currency cards (hidden for hasAccDec ports — only cash + diff/day shown)
-        const totalCards = EXT_PORTS[key]?.hasAccDec ? '' : (Object.keys(totals).length
+        // Total by currency cards — hidden for managed ports (Coke/Good) and hasAccDec
+        // ports, since the hero already shows the total in USD (this card is redundant).
+        const hideTotalCards = EXT_PORTS[key]?.hasAccDec || EXT_PORTS[key]?.isManaged;
+        const totalCards = hideTotalCards ? '' : (Object.keys(totals).length
             ? Object.entries(totals).map(([cur, val]) => `
                 <div class="currency-card">
                     <div class="cur-label">${CUR_SYM[cur]||cur} ${cur}</div>
@@ -3167,6 +3299,7 @@ function renderExtPage(key) {
             const accs = S.holdings.filter(h => h.portfolioId === portId && h.type === 'accumulator');
             let totalDiffDay = 0;
             const symMap = {};
+            const symContracts = {};   // sym → [{ strike, qty, spot, ko, expiry, diff }]
             for (const h of accs) {
                 const sym    = (h.optionUnderlying || '').toUpperCase().trim();
                 const spot   = getUnderlyingPrice(sym)?.price;
@@ -3176,12 +3309,25 @@ function renderExtPage(key) {
                 const diff = (spot - strike) * qty;
                 totalDiffDay += diff;
                 symMap[sym] = (symMap[sym] || 0) + diff;
+                (symContracts[sym] = symContracts[sym] || []).push({
+                    strike, qty, spot, diff,
+                    ko: parseFloat(h.koLevel) || 0, expiry: h.expiry || ''
+                });
             }
-            // grouped & sorted highest → lowest
-            const grouped = Object.entries(symMap).map(([sym, diff]) => ({ sym, diff })).sort((a, b) => b.diff - a.diff);
+            // grouped & sorted highest → lowest, with per-contract detail attached
+            const grouped = Object.entries(symMap).map(([sym, diff]) => ({
+                sym, diff,
+                // sort contracts by expiry ascending (soonest first); blanks go last
+                contracts: (symContracts[sym] || []).sort((a, b) => {
+                    if (!a.expiry && !b.expiry) return b.diff - a.diff;
+                    if (!a.expiry) return 1;
+                    if (!b.expiry) return -1;
+                    return a.expiry.localeCompare(b.expiry);
+                })
+            })).sort((a, b) => b.diff - a.diff);
             const diffCol  = totalDiffDay >= 0 ? 'var(--green)' : 'var(--red)';
             const diffSign = totalDiffDay >= 0 ? '+' : '';
-            const diffStr  = `${diffSign}$${Math.abs(totalDiffDay) >= 1000 ? compact(totalDiffDay) : totalDiffDay.toFixed(2)}`;
+            const diffStr  = `${diffSign}$${Math.round(Math.abs(totalDiffDay)).toLocaleString('en')}`;
             // store data in global map keyed by portKey so onclick can retrieve it safely
             const popupKey = key + '_diffday';
             window._diffDayData = window._diffDayData || {};
@@ -3499,26 +3645,83 @@ function renderWatermarkSection(key, portId) {
         </div>`;
 }
 
+let _diffDayCurrentKey = null;
+
+function _fmtDiffDay(v) {
+    const sign = v >= 0 ? '+' : '';
+    const col  = v >= 0 ? 'var(--green)' : 'var(--red)';
+    return { txt: `${sign}$${Math.round(Math.abs(v)).toLocaleString('en')}`, col };
+}
+
+// Level 1: list of symbols (click a symbol → drill into its contracts)
+function _renderDiffDaySymbols(popupKey) {
+    const rows  = document.getElementById('diffDayPopupRows');
+    const title = document.getElementById('diffDayPopupTitle');
+    const back  = document.getElementById('diffDayBackBtn');
+    const data  = (window._diffDayData && window._diffDayData[popupKey]) || [];
+    title.textContent = 'DIFF/DAY รายตัว';
+    back.style.display = 'none';
+    if (!data.length) {
+        rows.innerHTML = '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:6px 0">ยังไม่มีข้อมูลราคา</div>';
+        return;
+    }
+    rows.innerHTML = data.map((l, i) => {
+        const f = _fmtDiffDay(l.diff);
+        const border = i < data.length - 1 ? 'border-bottom:1px solid rgba(255,255,255,0.06)' : '';
+        const n = (l.contracts || []).length;
+        return `<div onclick="diffDayDrill(event,'${popupKey}','${l.sym}')" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;cursor:pointer;${border}">
+            <div style="min-width:0">
+                <div style="font-size:13px;font-weight:700;color:var(--text)">${l.sym}</div>
+                <div style="font-size:10px;color:var(--text-muted)">${n} contract${n>1?'s':''} ›</div>
+            </div>
+            <div style="font-size:14px;font-weight:800;color:${f.col}">${f.txt}</div>
+        </div>`;
+    }).join('');
+}
+
+// Level 2: contracts of one symbol (strike / qty·KO·expiry / diff-per-contract)
+function _renderDiffDayContracts(popupKey, sym) {
+    const rows  = document.getElementById('diffDayPopupRows');
+    const title = document.getElementById('diffDayPopupTitle');
+    const back  = document.getElementById('diffDayBackBtn');
+    const data  = (window._diffDayData && window._diffDayData[popupKey]) || [];
+    const entry = data.find(d => d.sym === sym);
+    const contracts = entry?.contracts || [];
+    back.style.display = 'block';
+    const spot = contracts[0]?.spot;
+    title.innerHTML = `${sym}${spot ? ` · spot <span style="color:#fbbf24;font-weight:800">$${spot.toFixed(2)}</span>` : ''} · ${contracts.length} contract${contracts.length>1?'s':''}`;
+    if (!contracts.length) {
+        rows.innerHTML = '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:6px 0">ไม่มีข้อมูล</div>';
+        return;
+    }
+    rows.innerHTML = contracts.map((c, i) => {
+        const f = _fmtDiffDay(c.diff);
+        const border = i < contracts.length - 1 ? 'border-bottom:1px solid rgba(255,255,255,0.06)' : '';
+        const koStr  = c.ko ? ` · KO $${c.ko.toFixed(2)}` : '';
+        const expStr = c.expiry ? ` · ${c.expiry}` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${border}">
+            <div style="min-width:0">
+                <div style="font-size:12px;font-weight:700;color:var(--text)">Strike $${c.strike.toFixed(2)}</div>
+                <div style="font-size:10px;color:var(--text-muted)">${Math.round(c.qty).toLocaleString('en')}/วัน${koStr}${expStr}</div>
+            </div>
+            <div style="font-size:13px;font-weight:800;color:${f.col}">${f.txt}</div>
+        </div>`;
+    }).join('');
+}
+
+function diffDayDrill(event, popupKey, sym) {
+    event.stopPropagation();
+    _renderDiffDayContracts(popupKey, sym);
+}
+function diffDayBack() {
+    if (_diffDayCurrentKey) _renderDiffDaySymbols(_diffDayCurrentKey);
+}
+
 function showDiffDayPopup(event, popupKey) {
     event.stopPropagation();
     const popup = document.getElementById('diffDayPopup');
-    const rows  = document.getElementById('diffDayPopupRows');
-    const data  = (window._diffDayData && window._diffDayData[popupKey]) || [];
-
-    if (!data.length) {
-        rows.innerHTML = '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:6px 0">ยังไม่มีข้อมูลราคา</div>';
-    } else {
-        rows.innerHTML = data.map((l, i) => {
-            const col  = l.diff >= 0 ? 'var(--green)' : 'var(--red)';
-            const sign = l.diff >= 0 ? '+' : '';
-            const fmt  = `${sign}$${Math.abs(l.diff) >= 1000 ? compact(l.diff) : Math.round(l.diff).toLocaleString('en')}`;
-            const border = i < data.length - 1 ? 'border-bottom:1px solid rgba(255,255,255,0.06)' : '';
-            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;${border}">
-                <div style="font-size:13px;font-weight:700;color:var(--text)">${l.sym}</div>
-                <div style="font-size:14px;font-weight:800;color:${col}">${fmt}</div>
-            </div>`;
-        }).join('');
-    }
+    _diffDayCurrentKey = popupKey;
+    _renderDiffDaySymbols(popupKey);   // always start at symbol list
 
     // Position popup: beside card on desktop, below/above card on mobile
     const card = event.currentTarget;
@@ -5082,7 +5285,7 @@ function renderAllocList(sorted, totalTHB) {
 function renderFilterTabs() {
     // Only show own portfolios (non-excluded) in the assets page tabs
     const ownPorts = S.portfolios.filter(p => !p.excludeFromTotal);
-    const tabs = [{ id:'all', name:'Dam' }, ...ownPorts.map(p => ({ id: p.id, name: p.name }))];
+    const tabs = [{ id:'all', name:'Summary' }, ...ownPorts.map(p => ({ id: p.id, name: p.name }))];
     document.getElementById('filterTabs').innerHTML = tabs.map(t =>
         `<button class="filter-tab${curFilter===t.id?' active':''}" onclick="setFilter('${t.id}')">${t.name}</button>`
     ).join('');
@@ -6358,25 +6561,28 @@ async function fetchAllPrices() {
         const extraOptSyms  = optionUnderlyingSyms.filter(s => !knownSymSet.has(s));
         const batchSyms     = [...knownSyms, ...extraOptSyms];
 
-        // Step A: Finnhub + Yahoo (both real-time, correct-market) in parallel.
-        // Stooq is NOT here — it's slow (proxy chain) and returns wrong-market EOD close.
-        const [finnhubResult, batchResult, ...autoResults] = await Promise.all([
-            fetchFinnhubPrices(batchSyms),        // Primary: fast, direct, US real-time
-            fetchYahooBatch(batchSyms),            // Secondary: real-time, respects market suffix
+        // Step A: Yahoo is the PRIMARY source (real-time, correct market, fast via
+        // Promise.any racing). Run it together with auto-symbol resolves in parallel.
+        // Finnhub/Stooq are NOT on the critical path — they only fill gaps afterwards.
+        const [batchResult, ...autoResults] = await Promise.all([
+            fetchYahooBatch(batchSyms),
             ...autoHoldings.map(h => resolvePrice(h)),
         ]);
+        let combined = { ...batchResult };
 
-        // Merge: Finnhub → Yahoo (Yahoo wins). Yahoo's regularMarketPrice is genuine
-        // real-time and matches broker prices; Finnhub free tier can be delayed/off,
-        // so Finnhub only fills symbols Yahoo didn't return.
-        let combined = { ...finnhubResult, ...batchResult };
+        // Fallback 1: Finnhub — only for symbols Yahoo missed (avoids waiting on
+        // Finnhub's slow per-batch rate-limited calls in the common case).
+        let missing = [...new Set(batchSyms)].filter(s => !combined[s]);
+        if (missing.length && finnhubKey) {
+            const finnhubResult = await fetchFinnhubPrices(missing);
+            combined = { ...finnhubResult, ...combined };
+            missing = [...new Set(batchSyms)].filter(s => !combined[s]);
+        }
 
-        // Stooq fallback ONLY for symbols neither source could resolve.
-        // Keeps the common case fast (~2s) and prevents Stooq's stale wrong-market
-        // prices from overriding correct real-time data.
-        const stillMissing = [...new Set(batchSyms)].filter(s => !combined[s]);
-        if (stillMissing.length) {
-            const stooqResult = await fetchStooqBatch(stillMissing);
+        // Fallback 2: Stooq — only for symbols still missing (slow proxy chain,
+        // EOD close). Last resort so it never slows the normal path.
+        if (missing.length) {
+            const stooqResult = await fetchStooqBatch(missing);
             combined = { ...stooqResult, ...combined };
         }
 

@@ -1148,19 +1148,19 @@ body {
     </div>
     <div id="cokeHoldingsList"></div>
 
-    <!-- Options section -->
-    <div class="page-header" style="padding-top:4px">
-        <h2>⚙️ Options</h2>
-        <button class="btn-add" onclick="openAddOption('coke')" style="background:#7c3aed">+ เพิ่ม Option</button>
-    </div>
-    <div id="cokeOptionsList"></div>
-
     <!-- Liabilities / Margin -->
     <div class="section-header">
         <h3>🔴 Margin / หนี้</h3>
         <button class="btn-add" style="background:var(--red)" onclick="openAddExtLiability('coke')">+ เพิ่มหนี้</button>
     </div>
     <div id="cokeLiabilitiesList"></div>
+
+    <!-- Options section -->
+    <div class="page-header" style="padding-top:4px">
+        <h2>⚙️ Options</h2>
+        <button class="btn-add" onclick="openAddOption('coke')" style="background:#7c3aed">+ เพิ่ม Option</button>
+    </div>
+    <div id="cokeOptionsList"></div>
 </div>
 
 <!-- ══ PAGE: PORT KHUN GOOD ══ -->
@@ -1591,7 +1591,7 @@ body {
 
     <div class="form-group">
         <label class="form-label">ชื่อหนี้ / ประเภท</label>
-        <input class="form-input" id="liabilityName" placeholder="เช่น Margin Loan, สินเชื่อ, Credit Line">
+        <input class="form-input" id="liabilityName" placeholder="เว้นว่างได้ = Margin (ค่าเริ่มต้น)">
     </div>
 
     <div class="form-group">
@@ -2499,18 +2499,10 @@ function renderLiabilitiesList() {
     }).join('');
 }
 
-// ─── Auto-set liability currency based on selected portfolio ───
+// ─── Currency default for liabilities: USD for all portfolios ───
 function onLiabilityPortfolioChange() {
-    const sel = document.getElementById('liabilityPortfolio');
-    const port = S.portfolios.find(p => p.id === sel.value);
-    if (!port) return;
-    const nameLC = (port.name || '').toLowerCase();
-    // USD-default portfolios: Moomoo, HSBC, Citi
-    if (/moomoo|hsbc|citi/.test(nameLC)) {
-        document.getElementById('liabilityCurrency').value = 'USD';
-    } else {
-        document.getElementById('liabilityCurrency').value = 'THB';
-    }
+    // All debts default to USD (mostly USD margin loans). User can still change it.
+    document.getElementById('liabilityCurrency').value = 'USD';
 }
 
 // ─── Open add/edit liability modal ───
@@ -2521,12 +2513,11 @@ function openAddLiability() {
     document.getElementById('liabilityAmount').value   = '';
     document.getElementById('liabilityRate').value     = '';
     document.getElementById('liabilityNote').value     = '';
+    document.getElementById('liabilityCurrency').value = 'USD';   // USD default
     document.getElementById('btnDeleteLiability').style.display = 'none';
     const sel = document.getElementById('liabilityPortfolio');
     sel.innerHTML = S.portfolios.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
     if (curFilter !== 'all' && S.portfolios.find(p=>p.id===curFilter)) sel.value = curFilter;
-    // Auto-set currency based on selected portfolio
-    onLiabilityPortfolioChange();
     openModal('liabilityModal');
 }
 
@@ -2548,10 +2539,10 @@ function openEditLiability(id) {
 
 function saveLiability() {
     const id     = document.getElementById('editLiabilityId').value;
-    const name   = document.getElementById('liabilityName').value.trim();
+    // Default name to "Margin" if left blank
+    const name   = document.getElementById('liabilityName').value.trim() || 'Margin';
     const amount = document.getElementById('liabilityAmount').value.replace(/,/g, '');
     const pid    = document.getElementById('liabilityPortfolio').value;
-    if (!name)   { alert('กรุณาใส่ชื่อหนี้'); return; }
     if (!amount) { alert('กรุณาใส่จำนวนเงิน'); return; }
     if (!pid)    { alert('กรุณาเลือกพอร์ต'); return; }
 
@@ -6567,26 +6558,27 @@ async function fetchAllPrices() {
         const extraOptSyms  = optionUnderlyingSyms.filter(s => !knownSymSet.has(s));
         const batchSyms     = [...knownSyms, ...extraOptSyms];
 
-        // Step A: Yahoo is the PRIMARY source (real-time, correct market, fast via
-        // Promise.any racing). Run it together with auto-symbol resolves in parallel.
-        // Finnhub/Stooq are NOT on the critical path — they only fill gaps afterwards.
         // Cap each auto-resolve so one unresolvable symbol (10 candidates × proxy
         // retries) can't stall the whole batch. 12s is plenty for a real match.
         const withTimeout = (p, ms) => Promise.race([
             p, new Promise(res => setTimeout(() => res(null), ms))
         ]);
-        const [batchResult, ...autoResults] = await Promise.all([
-            fetchYahooBatch(batchSyms),
+
+        // Step A: Finnhub is the PRIMARY source — direct API, CORS-friendly, no proxy,
+        // fast (~1-2s), real-time US. Run it together with the auto-symbol resolves.
+        const [finnhubResult, ...autoResults] = await Promise.all([
+            finnhubKey ? fetchFinnhubPrices(batchSyms) : Promise.resolve({}),
             ...autoHoldings.map(h => withTimeout(resolvePrice(h), 12000)),
         ]);
-        let combined = { ...batchResult };
+        let combined = { ...finnhubResult };
 
-        // Fallback 1: Finnhub — only for symbols Yahoo missed (avoids waiting on
-        // Finnhub's slow per-batch rate-limited calls in the common case).
+        // Fallback 1: Yahoo — only for symbols Finnhub missed (non-US markets, or
+        // when there's no Finnhub key). Yahoo needs slow proxies, so keep it off the
+        // critical path whenever Finnhub already answered.
         let missing = [...new Set(batchSyms)].filter(s => !combined[s]);
-        if (missing.length && finnhubKey) {
-            const finnhubResult = await fetchFinnhubPrices(missing);
-            combined = { ...finnhubResult, ...combined };
+        if (missing.length) {
+            const yahooResult = await fetchYahooBatch(missing);
+            combined = { ...yahooResult, ...combined };   // Finnhub wins where both have it
             missing = [...new Set(batchSyms)].filter(s => !combined[s]);
         }
 

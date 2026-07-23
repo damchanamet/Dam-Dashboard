@@ -3733,19 +3733,21 @@ function showDiffDayPopup(event, popupKey) {
 
     let left, top;
     if (window.innerWidth < 500) {
-        // Mobile: center horizontally, show below card (or above if no room)
+        // Mobile: center horizontally, show below card; if it doesn't fit, push up
+        // but never past the safe top area (iPhone notch / status bar).
         left = Math.max(8, (window.innerWidth - pw) / 2);
         top  = rect.bottom + gap;
-        if (top + ph > window.innerHeight - 8) top = rect.top - ph - gap;
+        if (top + ph > window.innerHeight - 8) top = window.innerHeight - ph - 8;
     } else {
         // Desktop: prefer right side, fallback left
         left = rect.right + gap;
         if (left + pw > window.innerWidth - 8) left = rect.left - pw - gap;
         top  = rect.top + (rect.height / 2) - (ph / 2);
     }
-    // Final clamp — always stay within viewport
+    // Final clamp — stay within viewport. On mobile keep clear of the notch (60px).
+    const minTop = window.innerWidth < 500 ? 60 : 8;
     left = Math.max(8, Math.min(left, window.innerWidth  - pw - 8));
-    top  = Math.max(8, Math.min(top,  window.innerHeight - ph - 8));
+    top  = Math.max(minTop, Math.min(top, window.innerHeight - ph - 8));
 
     popup.style.left = left + 'px';
     popup.style.top  = top  + 'px';
@@ -6511,6 +6513,10 @@ async function fetchAllPrices() {
     // FX rates in background
     const fxPromise = fetchFXRates();
 
+    // Clear stale underlying-price cache so option/acc/dec spot prices are always
+    // re-fetched fresh this round (prevents e.g. PLTR/DDOG sticking at an old value).
+    optionUnderlyingCache = {};
+
     // Eligible: stock/fund types only — exclude derivatives, cash, and money market
     const SKIP_TYPES = new Set(['cash','money_market','other','option','accumulator','decumulator','fcn']);
     const eligible = S.holdings.filter(h =>
@@ -6564,9 +6570,14 @@ async function fetchAllPrices() {
         // Step A: Yahoo is the PRIMARY source (real-time, correct market, fast via
         // Promise.any racing). Run it together with auto-symbol resolves in parallel.
         // Finnhub/Stooq are NOT on the critical path — they only fill gaps afterwards.
+        // Cap each auto-resolve so one unresolvable symbol (10 candidates × proxy
+        // retries) can't stall the whole batch. 12s is plenty for a real match.
+        const withTimeout = (p, ms) => Promise.race([
+            p, new Promise(res => setTimeout(() => res(null), ms))
+        ]);
         const [batchResult, ...autoResults] = await Promise.all([
             fetchYahooBatch(batchSyms),
-            ...autoHoldings.map(h => resolvePrice(h)),
+            ...autoHoldings.map(h => withTimeout(resolvePrice(h), 12000)),
         ]);
         let combined = { ...batchResult };
 

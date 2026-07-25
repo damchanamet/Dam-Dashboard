@@ -6825,7 +6825,9 @@ const PROXIES = [
 
 const _fetch = async (url, timeout=5000) => {
     try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+        // cache:'no-store' — prevents the browser (esp. Safari/iOS) from replaying a
+        // cached quote response, which would show a stale price on every refresh.
+        const r = await fetch(url, { signal: AbortSignal.timeout(timeout), cache: 'no-store' });
         if (!r.ok) return null;
         return await r.json();
     } catch { return null; }
@@ -6919,7 +6921,7 @@ async function fetchFinnhubPrices(yahooSymbols) {
             try {
                 const r = await fetch(
                     `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fs)}&token=${encodeURIComponent(finnhubKey)}`,
-                    { signal: AbortSignal.timeout(7000) }
+                    { signal: AbortSignal.timeout(7000), cache: 'no-store' }
                 );
                 if (!r.ok) return;
                 const d = await r.json();
@@ -6969,7 +6971,7 @@ async function fetchStooqBatch(yahooSymbols) {
 
     const tryText = async fetchUrl => {
         try {
-            const r = await fetch(fetchUrl, { signal: AbortSignal.timeout(6000) });
+            const r = await fetch(fetchUrl, { signal: AbortSignal.timeout(6000), cache: 'no-store' });
             if (!r.ok) return null;
             const text = await r.text();
             if (!text || text.startsWith('<')) return null;

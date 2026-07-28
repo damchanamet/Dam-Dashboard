@@ -6440,7 +6440,18 @@ function buildCandidates(h) {
         const padded = sym.padStart(4, '0');
         return [padded + '.HK', sym + '.T'];
     }
-    return [sym, sym+'.BK', sym+'.HK', sym+'.SI', sym+'.L', sym+'.AX', sym+'.T', sym+'.NS', sym+'.DE', sym+'.PA'];
+    // Plain ticker (no dot, not numeric) → US listing ONLY.
+    // European exchanges cross-list US names (DRAM.DE, PINS.DE, TOST.DE, NVDA.DE)
+    // in EUR at a different price. Probing them here is what caused wrong-market
+    // prices, so they are deliberately excluded. Set the exchange explicitly if a
+    // holding really is listed abroad.
+    return [sym, sym + '.BK', sym + '.HK'];
+}
+
+// True if a symbol looks like a plain US ticker (no market suffix, not numeric)
+function isPlainUsTicker(sym) {
+    const s = (sym || '').toUpperCase().trim();
+    return !!s && !s.includes('.') && !/^\d+$/.test(s);
 }
 
 // ── Fetch FX rates (THB per 1 foreign currency unit) ──
@@ -6507,6 +6518,23 @@ async function fetchAllPrices() {
     // Clear stale underlying-price cache so option/acc/dec spot prices are always
     // re-fetched fresh this round (prevents e.g. PLTR/DDOG sticking at an old value).
     optionUnderlyingCache = {};
+
+    // Self-heal: wipe wrong-market data saved by earlier versions. A plain US ticker
+    // (DRAM, PINS, TOST, NVDA…) must never carry a foreign resolvedSymbol like
+    // 'DRAM.DE' or a non-USD currency — that's the Xetra cross-listing bug.
+    S.holdings.forEach(h => {
+        if (h.manualPrice || h.exchange === 'MANUAL') return;
+        if ((h.exchange && h.exchange !== 'AUTO')) return;
+        if (!isPlainUsTicker(h.symbol)) return;
+        if (h.resolvedSymbol && h.resolvedSymbol.includes('.')) {
+            console.warn('[price] clearing bad resolvedSymbol', h.symbol, '→', h.resolvedSymbol);
+            delete h.resolvedSymbol;
+        }
+        if (h.currency && h.currency !== 'AUTO' && h.currency !== 'USD') {
+            console.warn('[price] resetting non-USD currency for US ticker', h.symbol, h.currency);
+            h.currency = 'USD';
+        }
+    });
 
     // Eligible: stock/fund types only — exclude derivatives, cash, and money market
     const SKIP_TYPES = new Set(['cash','money_market','other','option','accumulator','decumulator','fcn']);
@@ -6595,53 +6623,58 @@ async function fetchAllPrices() {
             if (r?.price) optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
         }
 
-        // Step B: apply merged results; collect true misses
+        // ── Guarded price writer ───────────────────────────────────────────────
+        // Single place where a fetched price is committed to a holding. It refuses
+        // to (a) touch a manual-price holding, or (b) accept a non-USD quote for a
+        // plain US ticker — the wrong-market bug (DRAM.DE / PINS.DE / TOST.DE).
+        const applyPrice = (h, r, resolvedSym) => {
+            const idx = S.holdings.findIndex(x => x.id === h.id);
+            if (idx < 0 || !r?.price) return false;
+            const target = S.holdings[idx];
+            if (target.manualPrice || target.exchange === 'MANUAL') return false;
+
+            const usOnly = (target.exchange === 'AUTO' || !target.exchange)
+                        && isPlainUsTicker(target.symbol);
+            if (usOnly) {
+                if (r.currency && r.currency !== 'USD') return false;
+                if (resolvedSym && resolvedSym.includes('.')) return false;
+            }
+            target.currentPrice   = r.price;
+            target.resolvedSymbol = resolvedSym || target.symbol;
+            if (!target.currency || target.currency === 'AUTO') target.currency = r.currency;
+            target.lastFetch = new Date().toISOString();
+            delete target._stale;
+            return true;
+        };
+        // Mark a holding as not-refreshed this round (keeps its last known price,
+        // but flags it so the status line can report it instead of failing silently).
+        const markStale = h => {
+            const idx = S.holdings.findIndex(x => x.id === h.id);
+            if (idx >= 0) S.holdings[idx]._stale = true;
+            fail++; failList.push(h.symbol);
+        };
+
+        // Step B: apply batch results; collect true misses
         const misses = [];
         knownHoldings.forEach((h, i) => {
-            const sym = knownSyms[i];
-            const r   = combined[sym];
-            const idx = S.holdings.findIndex(x => x.id === h.id);
-            if (r && idx >= 0) {
-                S.holdings[idx].currentPrice   = r.price;
-                S.holdings[idx].resolvedSymbol = sym;
-                if (!h.currency || h.currency === 'AUTO') S.holdings[idx].currency = r.currency;
-                S.holdings[idx].lastFetch = new Date().toISOString();
-                ok++;
-            } else {
-                misses.push(h);
-            }
+            if (applyPrice(h, combined[knownSyms[i]], knownSyms[i])) ok++;
+            else misses.push(h);
         });
 
         // Step C: apply auto-detect results
         autoHoldings.forEach((h, i) => {
-            const r   = autoResults[i];
-            const idx = S.holdings.findIndex(x => x.id === h.id);
-            if (r && idx >= 0) {
-                S.holdings[idx].currentPrice   = r.price;
-                S.holdings[idx].resolvedSymbol = r.resolved;
-                if (!h.currency || h.currency === 'AUTO') S.holdings[idx].currency = r.currency;
-                S.holdings[idx].lastFetch = new Date().toISOString();
-                ok++;
-            } else {
-                fail++; failList.push(h.symbol);
-            }
+            if (applyPrice(h, autoResults[i], autoResults[i]?.resolved)) ok++;
+            else markStale(h);
         });
 
-        // Step D: true misses → parallel resolvePrice
+        // Step D: true misses → parallel resolvePrice (market-guarded)
         if (misses.length) {
-            const missResults = await Promise.all(misses.map(h => resolvePrice(h)));
+            const missResults = await Promise.all(
+                misses.map(h => withTimeout(resolvePrice(h), 12000))
+            );
             misses.forEach((h, i) => {
-                const r   = missResults[i];
-                const idx = S.holdings.findIndex(x => x.id === h.id);
-                if (r && idx >= 0) {
-                    S.holdings[idx].currentPrice   = r.price;
-                    S.holdings[idx].resolvedSymbol = r.resolved;
-                    if (!h.currency || h.currency === 'AUTO') S.holdings[idx].currency = r.currency;
-                    S.holdings[idx].lastFetch = new Date().toISOString();
-                    ok++;
-                } else {
-                    fail++; failList.push(h.symbol);
-                }
+                if (applyPrice(h, missResults[i], missResults[i]?.resolved)) ok++;
+                else markStale(h);
             });
         }
     }
@@ -6652,7 +6685,9 @@ async function fetchAllPrices() {
 
     const now = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
     let msg = `อัปเดต ${now} · ✓ ${ok}`;
-    if (fail) msg += ` · ✗ ${fail} (${failList.join(', ')})`;
+    // Failed symbols keep their previous price — say so explicitly rather than
+    // letting a stale number look like a fresh one.
+    if (fail) msg += ` · ⚠️ ราคาเดิม ${fail} ตัว (${failList.join(', ')})`;
     sub.textContent = msg;
     btn.classList.remove('loading');
     btn.innerHTML = '<span class="spin">↻</span> อัปเดตราคา';
@@ -6789,28 +6824,39 @@ async function searchYahooSymbol(query, exchangeHint) {
 
 // Resolve: cached symbol → direct candidates → Yahoo Search fallback
 async function resolvePrice(h) {
-    if (h.exchange === 'MANUAL') return null;
+    if (h.exchange === 'MANUAL' || h.manualPrice) return null;
 
     const candidates = buildCandidates(h);
     if (!candidates.length) return null;
 
-    // Try cached resolved symbol first (fast path)
-    if (h.resolvedSymbol && !candidates.includes(h.resolvedSymbol)) {
+    // Guard: a plain US ticker under AUTO must resolve to a USD listing.
+    // Rejects cross-listed European quotes (EUR) that would show a wrong price.
+    const usOnly = (h.exchange === 'AUTO' || !h.exchange) && isPlainUsTicker(h.symbol);
+    const accept = r => {
+        if (!r?.price) return false;
+        if (usOnly && r.currency && r.currency !== 'USD') return false;
+        return true;
+    };
+
+    // Try cached resolved symbol first (fast path) — but never trust a cached
+    // foreign symbol for a plain US ticker (e.g. a stale 'NVDA.DE').
+    if (h.resolvedSymbol && !candidates.includes(h.resolvedSymbol)
+        && !(usOnly && h.resolvedSymbol.includes('.'))) {
         const r = await fetchYahooSingle(h.resolvedSymbol);
-        if (r) return r;
+        if (accept(r)) return r;
     }
 
     // Try all built candidates
     for (const candidate of candidates) {
         const r = await fetchYahooSingle(candidate);
-        if (r) return r;
+        if (accept(r)) return r;
     }
 
     // Last resort: search Yahoo Finance for the ticker name
     const found = await searchYahooSymbol(h.symbol, h.exchange);
-    if (found && !candidates.includes(found)) {
+    if (found && !candidates.includes(found) && !(usOnly && found.includes('.'))) {
         const r = await fetchYahooSingle(found);
-        if (r) return r;
+        if (accept(r)) return r;
     }
 
     return null;

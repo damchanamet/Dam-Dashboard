@@ -4401,10 +4401,7 @@ function renderAccDecList(key, portId, typeFilter = null, elOverride = null) {
     // Lazy-fetch underlying prices
     const missing = [...new Set(sorted.map(h => h.optionUnderlying?.toUpperCase().trim()).filter(s => s && !getUnderlyingPrice(s)))];
     if (missing.length) {
-        Promise.all(missing.map(async sym => {
-            const r = await fetchYahooSingle(sym);
-            if (r?.price) optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
-        })).then(() => renderAccDecList(key, portId));
+        cacheUnderlyings(missing).then(got => { if (got) renderAccDecList(key, portId); });
     }
 }
 
@@ -4584,10 +4581,7 @@ function renderFCNList(key, portId, elOverride = null) {
     // Lazy-fetch underlying prices
     const missing = [...new Set(sorted.map(h => h.optionUnderlying?.toUpperCase().trim()).filter(s => s && !getUnderlyingPrice(s)))];
     if (missing.length) {
-        Promise.all(missing.map(async sym => {
-            const r = await fetchYahooSingle(sym);
-            if (r?.price) optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
-        })).then(() => renderFCNList(key, portId));
+        cacheUnderlyings(missing).then(got => { if (got) renderFCNList(key, portId); });
     }
 }
 
@@ -4631,6 +4625,34 @@ function getCoveredCallCap(h) {
     // Weighted effective price: capped portion @ strike, uncapped @ spot
     const effectivePrice = (cappedQty * capStrike + (qty - cappedQty) * spotPrice) / qty;
     return { capStrike, cappedQty, coveredUnits, effectivePrice, spotPrice, fullyCovered: cappedQty >= qty };
+}
+
+// Fetch an underlying's price on demand: Finnhub first (direct, fast, US real-time),
+// then the market-guarded resolver. Used by option / acc-dec / FCN lists so an
+// underlying with no matching stock holding still gets a spot price.
+async function fetchUnderlyingPrice(sym) {
+    const s = (sym || '').toUpperCase().trim();
+    if (!s) return null;
+    if (finnhubKey) {
+        try {
+            const res = await fetchFinnhubPrices([s]);
+            if (res?.[s]?.price) return res[s];
+        } catch(e) {}
+    }
+    return await resolvePrice({ symbol: s, exchange: 'AUTO' });
+}
+
+// Resolve a list of underlyings into optionUnderlyingCache; returns true if any hit
+async function cacheUnderlyings(syms) {
+    let got = false;
+    await Promise.all([...new Set(syms)].map(async sym => {
+        const r = await fetchUnderlyingPrice(sym);
+        if (r?.price) {
+            optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
+            got = true;
+        }
+    }));
+    return got;
 }
 
 // Look up current price of underlying stock — live cache first, then holdings fallback
@@ -4833,10 +4855,7 @@ function renderOptionsList(key, portId) {
         .filter(s => s && !getUnderlyingPrice(s));
     const uniqueMissing = [...new Set(missing)];
     if (uniqueMissing.length) {
-        Promise.all(uniqueMissing.map(async sym => {
-            const r = await fetchYahooSingle(sym);
-            if (r?.price) optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
-        })).then(() => {
+        cacheUnderlyings(uniqueMissing).then(() => {
             // Update only the moneyness strips in-place (no full re-render)
             opts.forEach(o => {
                 const strip = document.getElementById('moneyness_' + o.id);
@@ -6515,8 +6534,11 @@ async function fetchAllPrices() {
     // FX rates in background
     const fxPromise = fetchFXRates();
 
-    // Clear stale underlying-price cache so option/acc/dec spot prices are always
-    // re-fetched fresh this round (prevents e.g. PLTR/DDOG sticking at an old value).
+    // Clear the underlying-price cache so option/acc/dec spot prices are re-fetched
+    // fresh this round (prevents PLTR/DDOG sticking at an old value). Keep the old
+    // values aside: if a symbol can't be refreshed we restore it rather than showing
+    // "ไม่พบราคา" for an underlying that has no matching holding.
+    const _prevUnderlying = { ...optionUnderlyingCache };
     optionUnderlyingCache = {};
 
     // Self-heal: wipe wrong-market data saved by earlier versions. A plain US ticker
@@ -6621,6 +6643,23 @@ async function fetchAllPrices() {
         for (const sym of optionUnderlyingSyms) {
             const r = combined[sym];
             if (r?.price) optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
+        }
+
+        // Underlyings with no matching holding never reach Step D, so give them their
+        // own retry pass — otherwise an option/accumulator whose stock isn't held
+        // shows "ไม่พบราคา" whenever the batch misses it.
+        const missingUnderlyings = optionUnderlyingSyms.filter(s => !optionUnderlyingCache[s]);
+        if (missingUnderlyings.length) {
+            await Promise.all(missingUnderlyings.map(async sym => {
+                const r = await withTimeout(
+                    resolvePrice({ symbol: sym, exchange: 'AUTO' }), 12000
+                );
+                if (r?.price) {
+                    optionUnderlyingCache[sym] = { price: r.price, cur: r.currency || 'USD' };
+                } else if (_prevUnderlying[sym]) {
+                    optionUnderlyingCache[sym] = _prevUnderlying[sym];   // keep last known
+                }
+            }));
         }
 
         // ── Guarded price writer ───────────────────────────────────────────────

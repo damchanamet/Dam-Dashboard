@@ -919,7 +919,7 @@ body {
             <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:10px;border-bottom:none">
                 <div>
                     <div class="settings-row-label">Finnhub API Key <span id="finnhubStatus" style="font-size:11px;margin-left:6px"></span></div>
-                    <div class="settings-row-sub">ดึงราคาหุ้น US ได้เร็วและน่าเชื่อถือ · <a href="https://finnhub.io" target="_blank" style="color:var(--accent)">สมัครฟรีที่ finnhub.io</a></div>
+                    <div class="settings-row-sub">ดึงราคาหุ้น US + อัตราแลกเปลี่ยน ได้เร็วและน่าเชื่อถือ · <a href="https://finnhub.io" target="_blank" style="color:var(--accent)">สมัครฟรีที่ finnhub.io</a><br><span style="color:var(--green)">☁️ ใส่ครั้งเดียว sync ไปทุกเครื่องอัตโนมัติ</span></div>
                 </div>
                 <div style="display:flex;gap:8px;width:100%">
                     <input id="finnhubKeyInput" type="password" placeholder="ใส่ API key เช่น cv1abc123…"
@@ -1874,15 +1874,9 @@ async function init() {
             }
         }
     } catch(e) {}
-    _syncVCFromS(); // wire up VC vars from S (migrates old localStorage data on first run)
-    // Restore Finnhub key into input if settings tab is loaded
-    finnhubKey = localStorage.getItem('finnhubKey') || '';
-    const fkInput = document.getElementById('finnhubKeyInput');
-    if (fkInput && finnhubKey) {
-        fkInput.value = finnhubKey;
-        const el = document.getElementById('finnhubStatus');
-        if (el) el.textContent = '✓ บันทึกแล้ว';
-    }
+    // Wires up VC vars from S and reconciles the cloud-synced Finnhub key
+    // (adopts the Gist copy on a device where it was never typed in).
+    _syncVCFromS();
     renderAll();
     _initCloudUI();
     updateNotifUI();
@@ -2659,6 +2653,9 @@ function _syncVCFromS() {
     vcDeletedCalls         = S.vcDeletedCalls;
     vcExtraDistributions   = S.vcExtraDistributions;
     vcDeletedDistributions = S.vcDeletedDistributions;
+    // S was just (re)assigned — reconcile the cloud-synced Finnhub key too, so a
+    // device that never had the key typed in picks it up from the Gist.
+    try { _syncFinnhubKeyFromS(); } catch(e) {}
 }
 
 // Save VC data into S then push to cloud via save()
@@ -6479,6 +6476,36 @@ async function fetchFXRates() {
     // open.er-api.com is free but only updates every 24h → always stale
     const pairs = [['USDTHB=X','USD'],['HKDTHB=X','HKD'],['SGDTHB=X','SGD'],
                    ['GBPTHB=X','GBP'],['EURTHB=X','EUR'],['JPYTHB=X','JPY'],['AUDTHB=X','AUD']];
+
+    // ── Primary: Finnhub forex ────────────────────────────────────────────────
+    // Direct call, no CORS proxy, so it behaves identically on macOS and iPadOS.
+    // Yahoo (below) only works where the proxies aren't blocked, which is why Mac
+    // and iPad used to disagree — Mac got live Yahoo, iPad fell back to the 24h
+    // cached er-api rate. One shared source keeps every device on the same number.
+    if (finnhubKey) {
+        try {
+            const r = await fetch(
+                `https://finnhub.io/api/v1/forex/rates?base=USD&token=${encodeURIComponent(finnhubKey)}`,
+                { signal: AbortSignal.timeout(7000), cache: 'no-store' }
+            );
+            if (r.ok) {
+                const d = await r.json();
+                const q = d?.quote;
+                if (q?.THB > 0) {
+                    const usdThb = q.THB;              // THB per 1 USD
+                    const rates  = { THB: 1, USD: usdThb };
+                    // q[CUR] = CUR per 1 USD  →  THB per 1 CUR = usdThb / q[CUR]
+                    for (const cur of ['HKD','SGD','GBP','EUR','JPY','AUD','INR','CNY','KRW','TWD']) {
+                        if (q[cur] > 0) rates[cur] = usdThb / q[cur];
+                    }
+                    rates._src = 'finnhub';
+                    fxRates = rates;
+                    return true;
+                }
+            }
+        } catch(e) { /* fall through to Yahoo */ }
+    }
+
     try {
         const results = await Promise.allSettled(pairs.map(([sym]) => fetchYahooSingle(sym)));
         let got = 0;
@@ -6957,11 +6984,38 @@ async function fetchYahooSingle(symbol) {
 }
 
 // ── Finnhub price fetch (fast, reliable, CORS-friendly, free API key) ──
-function updateFinnhubKey(val) {
-    finnhubKey = val.trim();
-    localStorage.setItem('finnhubKey', finnhubKey);
+// The key is stored in S (so it syncs to every device via the private Gist) AND in
+// localStorage (so it still works before the first cloud pull completes).
+function _persistFinnhubKey(key) {
+    finnhubKey = (key || '').trim();
+    try { localStorage.setItem('finnhubKey', finnhubKey); } catch(e) {}
+    if (S.finnhubKey !== finnhubKey) {
+        S.finnhubKey = finnhubKey;
+        save();          // pushes to the Gist → other devices pick it up
+    }
+}
+// Reconcile the local key with the cloud copy after a sync pull
+function _syncFinnhubKeyFromS() {
+    const local = (localStorage.getItem('finnhubKey') || '').trim();
+    const cloud = (S.finnhubKey || '').trim();
+    if (cloud && cloud !== local) {
+        // Cloud has a key this device doesn't — adopt it
+        finnhubKey = cloud;
+        try { localStorage.setItem('finnhubKey', cloud); } catch(e) {}
+    } else if (local && !cloud) {
+        // This device has a key the cloud doesn't — upload it
+        finnhubKey = local;
+        S.finnhubKey = local;
+    }
+    const input = document.getElementById('finnhubKeyInput');
+    if (input && finnhubKey) input.value = finnhubKey;
     const el = document.getElementById('finnhubStatus');
-    if (el) el.textContent = finnhubKey ? '✓ บันทึกแล้ว' : '';
+    if (el && finnhubKey) el.textContent = '✓ บันทึกแล้ว';
+}
+function updateFinnhubKey(val) {
+    _persistFinnhubKey(val);
+    const el = document.getElementById('finnhubStatus');
+    if (el) el.textContent = finnhubKey ? '✓ บันทึกแล้ว (sync ทุกเครื่อง)' : '';
 }
 async function testFinnhubKey() {
     const key = finnhubKey || document.getElementById('finnhubKeyInput')?.value?.trim();
@@ -6970,12 +7024,11 @@ async function testFinnhubKey() {
     if (el) el.textContent = '⏳ กำลังทดสอบ…';
     try {
         const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=AAPL&token=${encodeURIComponent(key)}`,
-            { signal: AbortSignal.timeout(6000) });
+            { signal: AbortSignal.timeout(6000), cache: 'no-store' });
         const d = await r.json();
         if (d?.c > 0) {
-            finnhubKey = key;
-            localStorage.setItem('finnhubKey', key);
-            if (el) el.textContent = `✅ ใช้งานได้ (AAPL $${d.c})`;
+            _persistFinnhubKey(key);
+            if (el) el.textContent = `✅ ใช้งานได้ (AAPL $${d.c}) · sync ทุกเครื่อง`;
         } else {
             if (el) el.textContent = '❌ Key ไม่ถูกต้อง';
         }

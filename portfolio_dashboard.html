@@ -4896,8 +4896,13 @@ const arcLabelPlugin = {
 // Chart color palette for individual stocks
 const STOCK_PALETTE = ['#6366f1','#10b981','#f59e0b','#3b82f6','#ec4899','#f97316','#14b8a6','#a855f7','#ef4444','#84cc16'];
 
-// ─── SUMMARY ───
-function renderSummary() {
+// ═══════════════════════════════════════════════════════════════════════════
+//  NET WORTH — single source of truth
+//  Both the Summary page and the History snapshot call this, so the two can
+//  never drift apart (they used to: the snapshot skipped the covered-call cap
+//  and used a stale S.usdRate, so it recorded a different number).
+// ═══════════════════════════════════════════════════════════════════════════
+function computeNetWorth() {
     // ── 1. Build per-holding data with THB values ──
     const holdingData = S.holdings.map(h => {
         let price    = parseFloat(h.currentPrice || h.price) || 0;
@@ -4975,6 +4980,26 @@ function renderSummary() {
     });
 
     const netWorth = totalAssetsThb - totalLiabThb + excludedContrib + managedFeeContrib;
+    return {
+        holdingData, myData, excludedData, excludedPortIds,
+        totalAssetsThb, totalLiabThb,
+        excludedContrib, excludedContribMap,
+        managedFeeContrib, managedFeeMap,
+        netWorth,
+    };
+}
+
+// ─── SUMMARY ───
+function renderSummary() {
+    const _nw = computeNetWorth();
+    const {
+        holdingData, myData, excludedData, excludedPortIds,
+        totalAssetsThb, totalLiabThb,
+        excludedContrib, excludedContribMap,
+        managedFeeContrib, managedFeeMap,
+        netWorth,
+    } = _nw;
+
     const totals   = {};
     myData.forEach(h => { totals[h.cur] = (totals[h.cur] || 0) + h.val; });
 
@@ -5784,63 +5809,8 @@ function renderHistChart() {
 }
 
 function saveSnapshot(opts = {}) {
-    // Compute current net worth (main portfolios + myShare from excluded)
-    const myHoldings = S.holdings.filter(h => {
-        const p = S.portfolios.find(x => x.id === h.portfolioId);
-        return !p || !p.excludeFromTotal;
-    });
-    const mainAssets = myHoldings.reduce((s, h) => {
-        let price = parseFloat(h.currentPrice||h.price)||0;
-        // Apply covered call cap — same logic as renderSummary display
-        const covCap = getCoveredCallCap(h);
-        if (covCap) price = covCap.effectivePrice;
-        const qty   = parseFloat(h.qty)||0;
-        const cur   = (h.currency&&h.currency!=='AUTO') ? h.currency : 'USD';
-        return s + toTHB(price*qty, cur);
-    }, 0);
-    // Exclude liabilities only from "other people's" ext portfolios (same logic as renderSummary)
-    const otherPeoplePortIdsSnap = new Set(
-        S.portfolios
-            .filter(p => {
-                if (!p.extKey) return false;
-                const cfg = EXT_PORTS[p.extKey];
-                return cfg && !cfg.includeInTotal;
-            })
-            .map(p => p.id)
-    );
-    const mainLiab = S.liabilities
-        .filter(l => !l.portfolioId || !otherPeoplePortIdsSnap.has(l.portfolioId))
-        .reduce((sum, l) => {
-            const amt = parseFloat(l.amount) || 0;
-            const cur = l.currency || 'THB';
-            return sum + toTHB(amt, cur);
-        }, 0);
-    let contrib = 0;
-    S.portfolios.filter(p => p.excludeFromTotal && p.myShare > 0).forEach(p => {
-        const portAssets = S.holdings.filter(h=>h.portfolioId===p.id).reduce((s,h)=>{
-            const price=parseFloat(h.currentPrice||h.price)||0, qty=parseFloat(h.qty)||0;
-            const cur=(h.currency&&h.currency!=='AUTO')?h.currency:'USD';
-            return s + toTHB(price*qty,cur);
-        },0);
-        contrib += (portAssets - portLiabTHB(p.id)) * (p.myShare/100);
-    });
-    // Add performance fees from managed portfolios
-    let managedFeeSnap = 0;
-    const usdRSnap = parseFloat(S.usdRate) || 35;
-    S.portfolios.filter(p => p.excludeFromTotal).forEach(p => {
-        const cfg = Object.values(EXT_PORTS).find(x => x.name === p.name);
-        if (!cfg?.isManaged || !cfg.feeRate) return;
-        const portAssets = S.holdings.filter(h=>h.portfolioId===p.id).reduce((s,h)=>{
-            const price=parseFloat(h.currentPrice||h.price)||0, qty=parseFloat(h.qty)||0;
-            const cur=(h.currency&&h.currency!=='AUTO')?h.currency:'USD';
-            return s + toTHB(price*qty,cur);
-        },0);
-        const portNetUsd = (portAssets - portLiabTHB(p.id)) / usdRSnap;
-        const wm = parseFloat(p.watermark) || 0;
-        const aboveWm = portNetUsd - wm;
-        if (wm > 0 && aboveWm > 0) managedFeeSnap += aboveWm * (cfg.feeRate / 100) * usdRSnap;
-    });
-    const netWorth = mainAssets - mainLiab + contrib + managedFeeSnap;
+    // Use the exact same calculation as the Summary page — see computeNetWorth().
+    const { netWorth } = computeNetWorth();
     if (!netWorth) {
         if (!opts.silent) alert('ยังไม่มีข้อมูลราคา กรุณาอัปเดตราคาก่อน');
         return false;

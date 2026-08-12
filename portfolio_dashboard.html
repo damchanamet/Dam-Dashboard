@@ -2656,6 +2656,27 @@ function _syncVCFromS() {
     // S was just (re)assigned — reconcile the cloud-synced Finnhub key too, so a
     // device that never had the key typed in picks it up from the Gist.
     try { _syncFinnhubKeyFromS(); } catch(e) {}
+    try { _runMigrations(); } catch(e) {}
+}
+
+// One-time data migrations. Each is guarded by a flag stored in S so it runs once
+// per dataset (and syncs), and never overrides a later manual change by the user.
+function _runMigrations() {
+    let dirty = false;
+    // Port Dike no longer holds any of Dam's own money → stop adding a myShare
+    // contribution to Net Worth. (EXT_PORTS default is now 0; this clears the
+    // 50% already saved in existing data.)
+    if (!S._mig_dikeShare0) {
+        S.portfolios.forEach(p => {
+            if ((p.extKey === 'dike' || p.isDike) && p.myShare) {
+                p.myShare = 0;
+                dirty = true;
+            }
+        });
+        S._mig_dikeShare0 = true;
+        dirty = true;
+    }
+    if (dirty) save();
 }
 
 // Save VC data into S then push to cloud via save()
@@ -3128,7 +3149,7 @@ function renderVCPage() {
 const CLIENT_AUTO_SYNC = '';
 // ──────────────────────────────────────────────────────────────────────────────
 const EXT_PORTS = {
-    dike: { name: 'Port Dike', color: '#f59e0b', myShare: 50, icon: '🏦' },
+    dike: { name: 'Port Dike', color: '#f59e0b', myShare: 0,  icon: '🏦' },
     dew:  { name: 'Port Dew',  color: '#10b981', myShare: 0,  icon: '🌿' },
     big:  { name: 'Port Big',  color: '#3b82f6', myShare: 0,  icon: '💼' },
     coke: { name: 'Port Coke', color: '#f43f5e', myShare: 0,  icon: '🥤', isManaged: true, feeRate: 15 },

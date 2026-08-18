@@ -5190,9 +5190,9 @@ function renderSummary() {
                 : '';
             const feeInfo  = managedFeeMap[p.id];
             const feeStr   = feeInfo
-                ? `<div style="margin-top:10px;padding:6px 10px;background:rgba(244,63,94,0.1);border-radius:8px;border:1px solid rgba(244,63,94,0.25)">
-                       <div style="font-size:10px;color:#f43f5e;margin-bottom:2px">⭐ Fee ${(Object.values(EXT_PORTS).find(x=>x.name===p.name)?.feeRate)||15}%</div>
-                       <div style="font-size:13px;font-weight:700;color:#f43f5e;white-space:nowrap">+฿${compact(feeInfo.feeThb)}</div>
+                ? `<div style="margin-top:10px;padding:6px 10px;background:rgba(16,185,129,0.1);border-radius:8px;border:1px solid rgba(16,185,129,0.25)">
+                       <div style="font-size:10px;color:var(--green);margin-bottom:2px">⭐ Fee ${(Object.values(EXT_PORTS).find(x=>x.name===p.name)?.feeRate)||15}%</div>
+                       <div style="font-size:13px;font-weight:700;color:var(--green);white-space:nowrap">+฿${compact(feeInfo.feeThb)}</div>
                    </div>`
                 : '';
             const flexVal = (p.name.length + String(cnt).length > 16) ? 1.5 : 1;

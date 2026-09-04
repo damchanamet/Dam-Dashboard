@@ -732,8 +732,8 @@ body {
     <button class="btn-primary" onclick="saveAccDec()">บันทึก</button>
 
     <!-- Vesting action — shown only when editing -->
-    <div id="vestingPanel" style="display:none;margin-top:12px;padding:14px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:12px">
-        <div id="vestingPanelTitle" style="font-size:13px;font-weight:700;color:#818cf8;margin-bottom:10px">📦 บันทึก Vesting</div>
+    <div id="vestingPanel" style="display:none;margin-top:12px;padding:14px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.35);border-radius:12px">
+        <div id="vestingPanelTitle" style="font-size:13px;font-weight:700;color:#34d399;margin-bottom:10px">📦 บันทึก Vesting</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
             <div class="form-group" style="margin:0">
                 <label class="form-label" id="vestingInputLabel">จำนวนวันในรอบนี้</label>
@@ -745,7 +745,7 @@ body {
                 <div id="vestCostCalc"   style="font-size:12px;color:var(--text-muted)">หักเงินสด: —</div>
             </div>
         </div>
-        <button id="vestingConfirmBtn" onclick="confirmVesting()" style="width:100%;padding:10px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">
+        <button id="vestingConfirmBtn" onclick="confirmVesting()" style="width:100%;padding:12px;background:#10b981;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(16,185,129,0.35)">
             ✓ ยืนยันรับหุ้น
         </button>
     </div>
@@ -1772,12 +1772,23 @@ let autoRefreshTimer  = null;
 let nextRefreshAt     = null;   // Date object
 const AUTO_REFRESH_MS = 15 * 60 * 1000;   // 15 minutes
 
+const _fxWarned = new Set();
 function toTHB(amount, currency) {
     if (!amount || isNaN(amount)) return 0;
     const cur = (!currency || currency === 'AUTO') ? 'USD' : currency;
     if (cur === 'THB') return amount;
     const rate = fxRates[cur];
-    return rate ? amount * rate : 0;   // 0 if no rate (will be excluded from total)
+    if (!rate) {
+        // A missing rate silently values real money at ฿0 and drops it out of Net
+        // Worth — surface it once per currency so it can't hide (this is how HKD
+        // holdings went uncounted).
+        if (!_fxWarned.has(cur)) {
+            _fxWarned.add(cur);
+            console.warn(`[FX] missing rate for ${cur} — those holdings count as ฿0 until it loads`);
+        }
+        return 0;
+    }
+    return amount * rate;
 }
 
 const CUR_SYM = { THB:'฿', USD:'$', HKD:'HK$', SGD:'S$', EUR:'€', GBP:'£', JPY:'¥', AUD:'A$', INR:'₹', KRW:'₩', TWD:'NT$' };
@@ -1869,9 +1880,7 @@ async function init() {
             S.liabilities = S.liabilities || [];
             S.snapshots   = S.snapshots   || [];
             // Restore last-known FX rates so calculations are correct before price refresh
-            if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
-                fxRates = { ...S.lastFxRates };
-            }
+            _adoptFxRates(S.lastFxRates);
         }
     } catch(e) {}
     // Wires up VC vars from S and reconciles the cloud-synced Finnhub key
@@ -1918,7 +1927,7 @@ function save(mode = 'structure') {
     }
     try {
         if (fxRates && Object.keys(fxRates).length > 1 && fxRates.USD) {
-            S.lastFxRates = { ...fxRates };
+            S.lastFxRates = { ...fxRates, _ts: Date.now() };
             // Also cache FX separately so it survives even if pfdata is replaced by cloud pull
             localStorage.setItem('lastFxRatesCache', JSON.stringify({ ...fxRates, _ts: Date.now() }));
         }
@@ -1944,6 +1953,20 @@ function _setUnsaved(val) {
     _hasUnsaved = val;
     const dot = document.getElementById('unsavedDot');
     if (dot) dot.style.display = val ? 'inline' : 'none';
+}
+
+// Adopt FX rates coming from the cloud ONLY if they are newer than what this device
+// already has. Without this check every sync pull overwrote a freshly fetched rate
+// with whatever stale number happened to be stored in the Gist — which is how the
+// USD/THB rate got stuck at one value forever.
+function _adoptFxRates(candidate) {
+    if (!candidate || Object.keys(candidate).length <= 1 || !candidate.USD) return;
+    const incomingTs = candidate._ts || 0;
+    const currentTs  = fxRates?._ts || 0;
+    const haveUsable = fxRates && fxRates.USD;
+    if (!haveUsable || incomingTs > currentTs) {
+        fxRates = { ...candidate };
+    }
 }
 
 function _cloudCfg() {
@@ -1991,9 +2014,7 @@ async function cloudLoad() {
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
                 S.snapshots   = S.snapshots   || [];
-                if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
-                    fxRates = { ...S.lastFxRates };
-                }
+                _adoptFxRates(S.lastFxRates);
                 _syncVCFromS();
                 localStorage.setItem('pfdata', JSON.stringify(S));
                 localStorage.setItem('jb_lastSync', new Date().toISOString());
@@ -2039,9 +2060,7 @@ async function _cloudPullIfNewer() {
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
                 S.snapshots   = S.snapshots   || [];
-                if (S.lastFxRates && Object.keys(S.lastFxRates).length > 1) {
-                    fxRates = { ...S.lastFxRates };
-                }
+                _adoptFxRates(S.lastFxRates);
                 _syncVCFromS();
                 localStorage.setItem('pfdata', JSON.stringify(S));
                 localStorage.setItem('jb_lastSync', new Date().toISOString());
@@ -2095,7 +2114,7 @@ async function _cloudPush() {
                             S.holdings    = (S.holdings || []).map(h => ({ ...h, ...(priceMap[h.id] || {}) }));
                             S.liabilities = S.liabilities || [];
                             S.snapshots   = S.snapshots   || [];
-                            if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+                            if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates, _ts: Date.now() };
                             S._lastModified = Date.now();
                             _syncVCFromS();
                             localStorage.setItem('pfdata', JSON.stringify(S));
@@ -2159,7 +2178,7 @@ async function saveAndSync() {
     S._v = (S._v || 0) + 1;
     S._structureModified = Date.now();
     S._lastModified      = S._structureModified;
-    if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates };
+    if (fxRates && Object.keys(fxRates).length > 1) S.lastFxRates = { ...fxRates, _ts: Date.now() };
     localStorage.setItem('pfdata', JSON.stringify(S));
 
     btn.classList.add('saving');
@@ -4011,18 +4030,33 @@ function setAccDecType(type) {
     const vcc = document.getElementById('vestCostCalc');
     const vcb = document.getElementById('vestingConfirmBtn');
     const vpt = document.getElementById('vestingPanelTitle');
+    const vp  = document.getElementById('vestingPanel');
+    // Colour the whole vesting panel by mode so it never looks like the blue
+    // "บันทึก" button sitting right above it (green = receive, red = sell).
+    const paint = (accent, rgb) => {
+        if (vp) {
+            vp.style.background  = `rgba(${rgb},0.08)`;
+            vp.style.borderColor = `rgba(${rgb},0.35)`;
+        }
+        if (vcb) {
+            vcb.style.background = accent;
+            vcb.style.boxShadow  = `0 2px 10px rgba(${rgb},0.35)`;
+        }
+    };
     if (isAcc) {
         if (vil) vil.textContent = 'จำนวนวันในรอบนี้';
         if (vsc) vsc.textContent = 'หุ้นที่รับ: —';
         if (vcc) vcc.textContent = 'หักเงินสด: —';
         if (vcb) vcb.textContent = '✓ ยืนยันรับหุ้น';
-        if (vpt) { vpt.textContent = '📦 บันทึก Vesting'; vpt.style.color = '#818cf8'; }
+        if (vpt) { vpt.textContent = '📦 บันทึก Vesting'; vpt.style.color = '#34d399'; }
+        paint('#10b981', '16,185,129');
     } else {
         if (vil) vil.textContent = 'จำนวนหุ้นที่ขายในรอบนี้';
         if (vsc) vsc.textContent = 'หุ้นที่ขาย: —';
         if (vcc) vcc.textContent = 'เงินที่ได้รับ: —';
         if (vcb) vcb.textContent = '✓ ยืนยันขายหุ้น';
         if (vpt) { vpt.textContent = '💰 บันทึกการขาย'; vpt.style.color = '#f87171'; }
+        paint('#ef4444', '239,68,68');
     }
 }
 
@@ -4680,11 +4714,15 @@ function getUnderlyingPrice(sym) {
     // 1. Live cache (populated from real market fetch) — highest priority
     const cached = optionUnderlyingCache[s];
     if (cached) return cached;
-    // 2. Search stock/fund holdings (exclude all derivative types)
+    // 2. Search stock/fund holdings (exclude all derivative types).
+    //    Manual-price holdings are skipped on purpose: a manual override is fine for
+    //    valuing the asset itself, but options/accumulators must always price off the
+    //    real market spot. Returning null here lets the lazy fetch pull a live quote.
     const DERIVATIVE_TYPES = new Set(['option','accumulator','decumulator','fcn']);
     const h = S.holdings.find(x =>
         !DERIVATIVE_TYPES.has(x.type) &&
         x.exchange !== 'MANUAL' &&
+        !x.manualPrice &&
         ((x.symbol || '').toUpperCase() === s || (x.resolvedSymbol || '').toUpperCase() === s)
     );
     if (h) {
@@ -6461,6 +6499,18 @@ function isPlainUsTicker(sym) {
     return !!s && !s.includes('.') && !/^\d+$/.test(s);
 }
 
+// Every currency the portfolio actually uses (holdings + liabilities). Used to make
+// sure we never finish an FX refresh missing a rate that real money depends on.
+function _neededCurrencies() {
+    const set = new Set(['USD']);
+    (S.holdings || []).forEach(h => {
+        const c = (h.currency && h.currency !== 'AUTO') ? h.currency : 'USD';
+        if (c) set.add(c);
+    });
+    (S.liabilities || []).forEach(l => { if (l.currency) set.add(l.currency); });
+    return [...set];
+}
+
 // ── Fetch FX rates (THB per 1 foreign currency unit) ──
 async function fetchFXRates() {
     // Primary: Yahoo Finance — real-time rates, all pairs in parallel
@@ -6468,68 +6518,93 @@ async function fetchFXRates() {
     const pairs = [['USDTHB=X','USD'],['HKDTHB=X','HKD'],['SGDTHB=X','SGD'],
                    ['GBPTHB=X','GBP'],['EURTHB=X','EUR'],['JPYTHB=X','JPY'],['AUDTHB=X','AUD']];
 
-    // ── Primary: Finnhub forex ────────────────────────────────────────────────
-    // Direct call, no CORS proxy, so it behaves identically on macOS and iPadOS.
-    // Yahoo (below) only works where the proxies aren't blocked, which is why Mac
-    // and iPad used to disagree — Mac got live Yahoo, iPad fell back to the 24h
-    // cached er-api rate. One shared source keeps every device on the same number.
-    if (finnhubKey) {
+    // Yahoo (real-time) and Finnhub (direct, no proxy) are fetched in PARALLEL.
+    // Yahoo is preferred because it's genuinely real-time, but it only works where
+    // the CORS proxies aren't blocked — that's why Mac and iPad used to disagree.
+    // Finnhub is the identical-everywhere fallback so a device that can't reach
+    // Yahoo still gets a usable rate instead of an ancient cached one.
+    const yahooFx = (async () => {
+        try {
+            const results = await Promise.allSettled(pairs.map(([sym]) => fetchYahooSingle(sym)));
+            let got = 0;
+            const newRates = { THB: 1 };
+            results.forEach((r, i) => {
+                if (r.status === 'fulfilled' && r.value?.price) {
+                    newRates[pairs[i][1]] = r.value.price;
+                    got++;
+                }
+            });
+            if (got > 0) { newRates._ts = Date.now(); newRates._src = 'yahoo'; return newRates; }
+        } catch(e) {}
+        return null;
+    })();
+
+    const finnhubFx = (async () => {
+        if (!finnhubKey) return null;
         try {
             const r = await fetch(
                 `https://finnhub.io/api/v1/forex/rates?base=USD&token=${encodeURIComponent(finnhubKey)}`,
                 { signal: AbortSignal.timeout(7000), cache: 'no-store' }
             );
+            if (!r.ok) return null;
+            const q = (await r.json())?.quote;
+            if (!(q?.THB > 0)) return null;
+            const usdThb = q.THB;                  // THB per 1 USD
+            const rates  = { THB: 1, USD: usdThb };
+            // q[CUR] = CUR per 1 USD  →  THB per 1 CUR = usdThb / q[CUR]
+            for (const cur of ['HKD','SGD','GBP','EUR','JPY','AUD','INR','CNY','KRW','TWD']) {
+                if (q[cur] > 0) rates[cur] = usdThb / q[cur];
+            }
+            rates._src = 'finnhub'; rates._ts = Date.now();
+            return rates;
+        } catch(e) { return null; }
+    })();
+
+    const [yRates, fRates] = await Promise.all([yahooFx, finnhubFx]);
+
+    // Merge instead of early-returning. Yahoo used to return as soon as it had USD,
+    // so if the HKD pair failed there was no HKD rate at all — and toTHB() silently
+    // values every HKD holding at ฿0, quietly dropping it out of Net Worth.
+    // Precedence: Yahoo (real-time) > Finnhub > er-api (24h).
+    let merged = { THB: 1, ...(fRates || {}), ...(yRates || {}) };
+    merged._src = yRates ? 'yahoo' : (fRates ? 'finnhub' : null);
+
+    // Which currencies does the portfolio actually use? Any of those still missing
+    // a rate must be filled, otherwise those holdings vanish from the total.
+    const needed = _neededCurrencies();
+    const stillMissing = () => needed.filter(c => c !== 'THB' && !(merged[c] > 0));
+
+    if (stillMissing().length || !merged.USD) {
+        // Fallback: open.er-api.com (24h cache, but covers every currency at once)
+        try {
+            const r = await fetch('https://open.er-api.com/v6/latest/USD',
+                { signal: AbortSignal.timeout(7000), cache: 'no-store' });
             if (r.ok) {
                 const d = await r.json();
-                const q = d?.quote;
-                if (q?.THB > 0) {
-                    const usdThb = q.THB;              // THB per 1 USD
-                    const rates  = { THB: 1, USD: usdThb };
-                    // q[CUR] = CUR per 1 USD  →  THB per 1 CUR = usdThb / q[CUR]
-                    for (const cur of ['HKD','SGD','GBP','EUR','JPY','AUD','INR','CNY','KRW','TWD']) {
-                        if (q[cur] > 0) rates[cur] = usdThb / q[cur];
+                if (d.result === 'success' && d.rates?.THB) {
+                    const usdThb = d.rates.THB;
+                    const era = { THB: 1, USD: usdThb };
+                    for (const [cur, rate] of Object.entries(d.rates)) {
+                        if (cur !== 'THB' && rate > 0) era[cur] = usdThb / rate;
                     }
-                    rates._src = 'finnhub';
-                    fxRates = rates;
-                    return true;
+                    // Only fill gaps — never overwrite a fresher Yahoo/Finnhub rate
+                    for (const [cur, rate] of Object.entries(era)) {
+                        if (!(merged[cur] > 0)) merged[cur] = rate;
+                    }
+                    if (!merged._src) merged._src = 'er-api';
                 }
             }
-        } catch(e) { /* fall through to Yahoo */ }
+        } catch(e) {}
     }
 
-    try {
-        const results = await Promise.allSettled(pairs.map(([sym]) => fetchYahooSingle(sym)));
-        let got = 0;
-        const newRates = { THB: 1 };
-        results.forEach((r, i) => {
-            if (r.status === 'fulfilled' && r.value?.price) {
-                newRates[pairs[i][1]] = r.value.price;
-                got++;
-            }
-        });
-        if (got > 0 && newRates.USD) { fxRates = newRates; return true; }
-        // Partial success but USD missing — try to fill USD from open.er-api.com
-        if (got > 0) { fxRates = newRates; } // use partial rates for now
-    } catch(e) {}
-    // Fallback: open.er-api.com (24h cache, but covers all currencies at once)
-    try {
-        const r = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(7000) });
-        if (r.ok) {
-            const d = await r.json();
-            if (d.result === 'success' && d.rates?.THB) {
-                const usdThb = d.rates.THB;
-                // Merge: keep Yahoo real-time rates for pairs we got, fill rest from er-api
-                const merged = { THB: 1, USD: usdThb };
-                for (const [cur, rate] of Object.entries(d.rates)) {
-                    if (cur !== 'THB' && rate > 0) merged[cur] = usdThb / rate;
-                }
-                // Yahoo rates override er-api (more real-time)
-                fxRates = { ...merged, ...fxRates };
-                if (!fxRates.USD) fxRates.USD = usdThb;
-                return true;
-            }
-        }
-    } catch(e) {}
+    if (merged.USD > 0) {
+        merged._ts = Date.now();
+        fxRates = merged;
+        const gaps = stillMissing();
+        if (gaps.length) console.warn('[FX] no rate for currencies in use:', gaps.join(', '));
+        return true;
+    }
+    // Nothing usable from any live source — fall through to the cached rates below.
     // Last resort: restore from last known cached rates
     const cached = S?.lastFxRates || JSON.parse(localStorage.getItem('lastFxRatesCache') || 'null');
     if (cached && cached.USD) {

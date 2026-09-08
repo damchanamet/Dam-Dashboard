@@ -935,6 +935,22 @@ body {
             • หุ้นไทย: <strong>ADVANC</strong>, <strong>PTT</strong>, <strong>SCB</strong><br>
             • หุ้น HK: <strong>0700</strong>, <strong>9988</strong>
         </div>
+
+        <!-- Price diagnostic -->
+        <div class="card" style="margin-top:12px">
+            <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:10px;border-bottom:none">
+                <div>
+                    <div class="settings-row-label">🔍 ตรวจสอบราคาหุ้น</div>
+                    <div class="settings-row-sub">ใส่ ticker แล้วกดตรวจ — จะบอกว่าทำไมราคาไม่อัปเดต และแต่ละแหล่งตอบอะไร</div>
+                </div>
+                <div style="display:flex;gap:8px;width:100%">
+                    <input id="diagSymbolInput" placeholder="เช่น LTMH" autocapitalize="characters"
+                        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;text-transform:uppercase">
+                    <button class="badge" onclick="runPriceDiagnostic()" style="white-space:nowrap">ตรวจสอบ</button>
+                </div>
+                <div id="diagResult" style="display:none;width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:340px;overflow-y:auto"></div>
+            </div>
+        </div>
     </div>
 
     <div class="settings-section">
@@ -1772,6 +1788,15 @@ let autoRefreshTimer  = null;
 let nextRefreshAt     = null;   // Date object
 const AUTO_REFRESH_MS = 15 * 60 * 1000;   // 15 minutes
 
+// Return the name only if it adds information beyond the title. Holdings often get
+// their name auto-filled with the ticker itself, which rendered the symbol twice.
+function _descIfDistinct(name, title) {
+    const n = (name || '').trim();
+    if (!n) return '';
+    const t = (title || '').trim();
+    return n.toUpperCase() === t.toUpperCase() ? '' : n;
+}
+
 const _fxWarned = new Set();
 function toTHB(amount, currency) {
     if (!amount || isNaN(amount)) return 0;
@@ -1969,6 +1994,33 @@ function _adoptFxRates(candidate) {
     }
 }
 
+// When cloud data replaces local state, keep whichever price was fetched most
+// recently for each holding. Without this a background pull silently reverts prices
+// this device just refreshed — another device's older snapshot wins purely because
+// its structural version number is higher. (This is why LTMH kept snapping back to
+// its 4 Sep price no matter how the fetch logic was fixed.)
+function _preserveFresherPrices(incoming, current) {
+    if (!incoming?.holdings || !current?.holdings) return incoming;
+    const localById = new Map(current.holdings.map(h => [h.id, h]));
+    incoming.holdings = incoming.holdings.map(h => {
+        const local = localById.get(h.id);
+        if (!local) return h;
+        // Never let a sync overwrite a manual price set on this device
+        if (local.manualPrice) {
+            return { ...h, manualPrice: local.manualPrice, currentPrice: local.manualPrice };
+        }
+        const tIn    = Date.parse(h.lastFetch || 0) || 0;
+        const tLocal = Date.parse(local.lastFetch || 0) || 0;
+        if (tLocal > tIn && local.currentPrice) {
+            return { ...h, currentPrice: local.currentPrice, lastFetch: local.lastFetch,
+                     currency: local.currency || h.currency,
+                     resolvedSymbol: local.resolvedSymbol || h.resolvedSymbol };
+        }
+        return h;
+    });
+    return incoming;
+}
+
 function _cloudCfg() {
     return { key: localStorage.getItem('gh_token') || '', id: localStorage.getItem('gh_gist_id') || '' };
 }
@@ -2008,8 +2060,9 @@ async function cloudLoad() {
             const cloudV = data._v || 0;
             const localV = S._v   || 0;
             if (cloudV >= localV) {
-                // Cloud is same version or newer — use it (normal case)
-                S = data;
+                // Cloud is same version or newer — use it (normal case), but keep
+                // locally-fresher prices so a startup pull can't revert a refresh.
+                S = _preserveFresherPrices(data, S);
                 S.portfolios  = S.portfolios  || [];
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
@@ -2054,8 +2107,10 @@ async function _cloudPullIfNewer() {
             const cloudV = data._v || 0;
             const localV = S._v   || 0;
             if (cloudV > localV) {
-                // Cloud has a higher version — another device made structural edits
-                S = data;
+                // Cloud has a higher version — another device made structural edits.
+                // Take its structure, but keep any price this device fetched more
+                // recently, otherwise a background pull undoes a fresh refresh.
+                S = _preserveFresherPrices(data, S);
                 S.portfolios  = S.portfolios  || [];
                 S.holdings    = S.holdings    || [];
                 S.liabilities = S.liabilities || [];
@@ -3519,7 +3574,8 @@ function renderExtHoldingsList(key, portId) {
             metaLine = `${qty.toLocaleString()} หน่วย × ${ps}`;
         }
         const title = h.type==='cash' ? `เงินสด (${cur})` : h.type==='money_market' ? `Money Market (${cur})` : (h.symbol||'—');
-        const desc  = h.name||'';
+        // Hide the name line when it just repeats the ticker (e.g. name "MRVL" under symbol MRVL)
+        const desc  = _descIfDistinct(h.name, title);
         const showPencil = h.type!=='cash'&&h.type!=='money_market'&&h.type!=='other';
         const idsJson = JSON.stringify(h._ids).replace(/"/g,'&quot;');
         const pencilBtn = showPencil
@@ -3532,7 +3588,7 @@ function renderExtHoldingsList(key, portId) {
             <div class="holding-bar" style="background:${color};margin-right:11px"></div>
             <div style="flex:1;min-width:0">
                 <div class="holding-symbol" style="font-size:15px">${title}</div>
-                <div class="holding-desc" style="margin-top:2px;font-size:11px">${desc}</div>
+                ${desc ? `<div class="holding-desc" style="margin-top:2px;font-size:11px">${desc}</div>` : ''}
                 <div class="holding-meta" style="font-size:11px;margin-top:6px">${metaLine}</div>
             </div>
             <div style="text-align:right;flex-shrink:0;min-width:80px;padding-left:8px">
@@ -5715,7 +5771,8 @@ function renderHoldingsList() {
         } else if (h.type === 'cash' || h.type === 'money_market') {
             desc = h.name || '';
         } else {
-            desc = h.name || (p ? p.name : '');
+            // Drop the name line when it only repeats the ticker (e.g. name "MRVL")
+            desc = _descIfDistinct(h.name, title) || (p ? p.name : '');
         }
 
         // Show pencil button for stocks (not cash/money_market/other)
@@ -5741,7 +5798,7 @@ function renderHoldingsList() {
             <!-- Col 1: Symbol info -->
             <div style="flex:1;min-width:0">
                 <div class="holding-symbol" style="font-size:15px">${title}</div>
-                <div class="holding-desc" style="margin-top:2px;font-size:11px">${desc}</div>
+                ${desc ? `<div class="holding-desc" style="margin-top:2px;font-size:11px">${desc}</div>` : ''}
                 <div style="display:flex;align-items:center;gap:3px;margin-top:6px">
                     <div class="holding-meta" style="font-size:11px">${metaLine}</div>
                 </div>
@@ -6499,6 +6556,17 @@ function isPlainUsTicker(sym) {
     return !!s && !s.includes('.') && !/^\d+$/.test(s);
 }
 
+// Exchanges that CROSS-LIST US companies in another currency (NVDA.DE on Xetra,
+// DRAM.DE, PINS.DE …). Matching a US ticker to one of these is always wrong.
+// Markets like .BK / .HK / .T list genuinely local companies (LTMH.BK is a Thai
+// company, not a cross-listing), so they must stay allowed.
+const CROSS_LIST_SUFFIXES = ['.DE','.PA','.L','.SW','.MI','.AS','.VI','.F','.BE',
+                             '.MU','.DU','.HM','.MX','.SN','.BA','.ST','.CO','.HE'];
+function isCrossListedSymbol(sym) {
+    const s = (sym || '').toUpperCase().trim();
+    return CROSS_LIST_SUFFIXES.some(sfx => s.endsWith(sfx));
+}
+
 // Every currency the portfolio actually uses (holdings + liabilities). Used to make
 // sure we never finish an FX refresh missing a rate that real money depends on.
 function _neededCurrencies() {
@@ -6641,13 +6709,16 @@ async function fetchAllPrices() {
         if (h.manualPrice || h.exchange === 'MANUAL') return;
         if ((h.exchange && h.exchange !== 'AUTO')) return;
         if (!isPlainUsTicker(h.symbol)) return;
-        if (h.resolvedSymbol && h.resolvedSymbol.includes('.')) {
-            console.warn('[price] clearing bad resolvedSymbol', h.symbol, '→', h.resolvedSymbol);
+        // Only clear CROSS-LISTING leftovers (NVDA.DE, DRAM.DE…). A legitimate
+        // foreign listing such as LTMH.BK (Thai company, THB) must be left alone —
+        // wiping it would strand the holding with no resolvable symbol.
+        if (h.resolvedSymbol && isCrossListedSymbol(h.resolvedSymbol)) {
+            console.warn('[price] clearing cross-listed resolvedSymbol', h.symbol, '→', h.resolvedSymbol);
             delete h.resolvedSymbol;
-        }
-        if (h.currency && h.currency !== 'AUTO' && h.currency !== 'USD') {
-            console.warn('[price] resetting non-USD currency for US ticker', h.symbol, h.currency);
-            h.currency = 'USD';
+            if (h.currency && h.currency !== 'AUTO' && h.currency !== 'USD') {
+                console.warn('[price] resetting currency for', h.symbol, h.currency, '→ USD');
+                h.currency = 'USD';
+            }
         }
     });
 
@@ -6682,13 +6753,16 @@ async function fetchAllPrices() {
                     return base + (ex.suffix || '');
                 }
             }
+            // 2. Trust a cached resolved symbol — unless it points at a cross-listing
+            //    exchange (NVDA.DE / DRAM.DE), which is never the right match.
+            //    Keeping LTMH.BK here sends Thai stocks straight to the right market
+            //    instead of failing on a US lookup first.
+            if (h.resolvedSymbol && !isCrossListedSymbol(h.resolvedSymbol)) {
+                return h.resolvedSymbol;
+            }
+            // 3. Plain US-style ticker (no dot, not all-digits) → bare US symbol
             const sym = (h.symbol || '').toUpperCase().trim();
-            // 2. Plain US-style ticker (no dot, not all-digits) → ALWAYS use the bare
-            //    US symbol. Never a stale foreign cache like NVDA.DE (Xetra) / NVDA.PA.
-            //    This also overwrites the bad cache on success (self-healing).
             if (!sym.includes('.') && !/^\d+$/.test(sym)) return sym;
-            // 3. Otherwise trust cached resolved symbol (HK / other foreign markets)
-            if (h.resolvedSymbol) return h.resolvedSymbol;
             return null;
         };
 
@@ -6765,15 +6839,20 @@ async function fetchAllPrices() {
             const target = S.holdings[idx];
             if (target.manualPrice || target.exchange === 'MANUAL') return false;
 
-            const usOnly = (target.exchange === 'AUTO' || !target.exchange)
-                        && isPlainUsTicker(target.symbol);
-            if (usOnly) {
-                if (r.currency && r.currency !== 'USD') return false;
-                if (resolvedSym && resolvedSym.includes('.')) return false;
-            }
+            // Only ever reject a cross-listing match (NVDA.DE etc.). A genuinely
+            // foreign listing like LTMH.BK is legitimate and must be accepted.
+            if (resolvedSym && isCrossListedSymbol(resolvedSym)) return false;
+
             target.currentPrice   = r.price;
             target.resolvedSymbol = resolvedSym || target.symbol;
-            if (!target.currency || target.currency === 'AUTO') target.currency = r.currency;
+            if (!target.currency || target.currency === 'AUTO') {
+                target.currency = r.currency;
+            } else if (r.currency && r.currency !== target.currency
+                       && resolvedSym && resolvedSym.includes('.')) {
+                // Resolved to a specific foreign market — that market's currency is
+                // authoritative, so repair a wrongly stored one (e.g. LTMH set to USD).
+                target.currency = r.currency;
+            }
             target.lastFetch = new Date().toISOString();
             delete target._stale;
             return true;
@@ -6802,7 +6881,7 @@ async function fetchAllPrices() {
         // Step D: true misses → parallel resolvePrice (market-guarded)
         if (misses.length) {
             const missResults = await Promise.all(
-                misses.map(h => withTimeout(resolvePrice(h), 12000))
+                misses.map(h => withTimeout(resolvePrice(h), 25000))
             );
             misses.forEach((h, i) => {
                 if (applyPrice(h, missResults[i], missResults[i]?.resolved)) ok++;
@@ -6961,45 +7040,53 @@ async function resolvePrice(h) {
     const candidates = buildCandidates(h);
     if (!candidates.length) return null;
 
-    // Guard: a plain US ticker under AUTO must resolve to a USD listing.
-    // Rejects cross-listed European quotes (EUR) that would show a wrong price.
-    const usOnly = (h.exchange === 'AUTO' || !h.exchange) && isPlainUsTicker(h.symbol);
-    const accept = r => {
-        if (!r?.price) return false;
-        if (usOnly && r.currency && r.currency !== 'USD') return false;
-        return true;
-    };
+    // Candidates are ordered US-first, so a cross-listed name (NVDA, DRAM) matches
+    // its US listing before anything else. The only hard rule is: never accept a
+    // cross-listing exchange for a plain ticker. Genuinely foreign listings such as
+    // LTMH.BK (a Thai company) must still be allowed through.
+    const accept = (r, sym) => !!r?.price && !isCrossListedSymbol(sym);
 
-    // Try cached resolved symbol first (fast path) — but never trust a cached
-    // foreign symbol for a plain US ticker (e.g. a stale 'NVDA.DE').
+    // Try cached resolved symbol first (fast path), unless it's a stale cross-listing
     if (h.resolvedSymbol && !candidates.includes(h.resolvedSymbol)
-        && !(usOnly && h.resolvedSymbol.includes('.'))) {
+        && !isCrossListedSymbol(h.resolvedSymbol)) {
         const r = await fetchYahooSingle(h.resolvedSymbol);
-        if (accept(r)) return r;
+        if (accept(r, h.resolvedSymbol)) return r;
     }
 
-    // Try all built candidates
+    // Try all built candidates in order (US first)
     for (const candidate of candidates) {
         const r = await fetchYahooSingle(candidate);
-        if (accept(r)) return r;
+        if (accept(r, candidate)) return r;
     }
 
     // Last resort: search Yahoo Finance for the ticker name
     const found = await searchYahooSymbol(h.symbol, h.exchange);
-    if (found && !candidates.includes(found) && !(usOnly && found.includes('.'))) {
+    if (found && !candidates.includes(found) && !isCrossListedSymbol(found)) {
         const r = await fetchYahooSingle(found);
-        if (accept(r)) return r;
+        if (accept(r, found)) return r;
     }
 
     return null;
 }
 
 // ── CORS proxy wrappers (shared) ──
-const PROXIES = [
-    u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+// Free CORS proxies are individually unreliable — they rate-limit, go down, and
+// recover at random. A Thai stock like LTMH.BK has NO other source (Finnhub's free
+// tier skips SET, Stooq has no data for it), so when the short proxy list was all
+// throttled the price simply couldn't be fetched at all. More independent routes =
+// far higher chance at least one answers on any given refresh.
+// `wrap: true` means the proxy returns {contents:"<json string>"} instead of raw JSON.
+const PROXY_DEFS = [
+    { build: u => `https://corsproxy.io/?${encodeURIComponent(u)}` },
+    { build: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+    { build: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
+    { build: u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, wrap: true },
+    { build: u => `https://api.cors.lol/?url=${encodeURIComponent(u)}` },
+    { build: u => `https://cors.eu.org/${u}` },
+    { build: u => `https://test.cors.workers.dev/?${u}` },
 ];
+// Backwards-compatible list of URL builders (used where only the URL is needed)
+const PROXIES = PROXY_DEFS.map(p => p.build);
 
 const _fetch = async (url, timeout=5000) => {
     try {
@@ -7008,6 +7095,37 @@ const _fetch = async (url, timeout=5000) => {
         const r = await fetch(url, { signal: AbortSignal.timeout(timeout), cache: 'no-store' });
         if (!r.ok) return null;
         return await r.json();
+    } catch { return null; }
+};
+
+// Remember which proxy last worked. Most free proxies are dead or throttled at any
+// moment (in practice only ~1 of 7 answers), and firing all of them at once just
+// rate-limits us further. Trying the known-good one first makes refreshes both
+// faster and far more likely to succeed.
+function _goodProxyIdx() {
+    const v = parseInt(localStorage.getItem('proxyOk') ?? '', 10);
+    return Number.isInteger(v) && v >= 0 && v < PROXY_DEFS.length ? v : -1;
+}
+function _rememberProxy(def) {
+    const i = PROXY_DEFS.indexOf(def);
+    if (i >= 0) { try { localStorage.setItem('proxyOk', String(i)); } catch(e) {} }
+}
+// PROXY_DEFS ordered with the last known-good proxy first
+function _orderedProxies() {
+    const i = _goodProxyIdx();
+    if (i < 0) return PROXY_DEFS;
+    return [PROXY_DEFS[i], ...PROXY_DEFS.filter((_, j) => j !== i)];
+}
+
+// Fetch JSON through a proxy definition, unwrapping {contents:"…"} style responses.
+const _fetchViaProxy = async (def, url, timeout=7000) => {
+    try {
+        const r = await fetch(def.build(url), { signal: AbortSignal.timeout(timeout), cache: 'no-store' });
+        if (!r.ok) return null;
+        if (!def.wrap) return await r.json();
+        const outer = await r.json();
+        const inner = outer?.contents;
+        return typeof inner === 'string' ? JSON.parse(inner) : (inner || null);
     } catch { return null; }
 };
 
@@ -7044,8 +7162,25 @@ async function fetchYahooSingle(symbol) {
     const r1 = await tryGroup(direct);
     if (r1) return r1;
 
-    // Round 2: all proxies simultaneously (rate-limited to one stock at a time via caller)
-    const proxied = PROXIES.flatMap(fn => urls.map(([u, type]) => async () => { const d = await _fetch(fn(u), 7000); return d ? parsers[type](d) : null; }));
+    // Round 2a: the proxy that worked last time, on its own. Cheap, and avoids the
+    // self-inflicted rate limiting that comes from firing every proxy at once.
+    const known = _goodProxyIdx() >= 0 ? PROXY_DEFS[_goodProxyIdx()] : null;
+    if (known) {
+        const r2a = await tryGroup(urls.map(([u, type]) => async () => {
+            const d = await _fetchViaProxy(known, u, 7000); return d ? parsers[type](d) : null;
+        }));
+        if (r2a) return r2a;
+    }
+
+    // Round 2b: everything else, racing — remember whichever proxy answers.
+    const proxied = _orderedProxies()
+        .filter(def => def !== known)
+        .flatMap(def => urls.map(([u, type]) => async () => {
+            const d = await _fetchViaProxy(def, u, 7000);
+            const parsed = d ? parsers[type](d) : null;
+            if (parsed) _rememberProxy(def);
+            return parsed;
+        }));
     return await tryGroup(proxied) ?? null;
 }
 
@@ -7100,6 +7235,209 @@ async function testFinnhubKey() {
         }
     } catch(e) { if (el) el.textContent = '❌ เชื่อมต่อไม่ได้'; }
 }
+// ── Price diagnostic ────────────────────────────────────────────────────────
+// Run debugPrice('LTMH') in the browser console to see exactly why a symbol is or
+// isn't updating: what's stored on the holding, and what each source returns.
+window.debugPrice = async function(symbol) {
+    const s = (symbol || '').toUpperCase().trim();
+    const hs = S.holdings.filter(h => (h.symbol || '').toUpperCase() === s);
+    console.log(`%c── debugPrice(${s}) ──`, 'font-weight:bold;font-size:13px');
+    if (!hs.length) { console.log('ไม่พบ holding ที่ใช้ symbol นี้'); return; }
+
+    hs.forEach((h, i) => {
+        const port = S.portfolios.find(p => p.id === h.portfolioId);
+        console.log(`holding #${i + 1}`, {
+            พอร์ต: port?.name, type: h.type,
+            exchange: h.exchange || '(AUTO)',
+            manualPrice: h.manualPrice ?? '(ไม่มี)',
+            resolvedSymbol: h.resolvedSymbol || '(ไม่มี)',
+            currency: h.currency,
+            currentPrice: h.currentPrice,
+            lastFetch: h.lastFetch || '(ไม่เคยดึงสำเร็จ)',
+            _stale: h._stale || false,
+        });
+        const blocked = h.manualPrice ? 'มี manualPrice → ระบบข้ามการดึงราคาโดยตั้งใจ'
+                      : h.exchange === 'MANUAL' ? 'exchange = MANUAL → ไม่ดึงอัตโนมัติ'
+                      : null;
+        if (blocked) console.warn('⛔ ' + blocked);
+    });
+
+    const h0 = hs[0];
+    console.log('candidates ที่จะลอง:', buildCandidates(h0));
+    console.log('FX ที่มีตอนนี้:', { USD: fxRates.USD, THB: fxRates.THB, HKD: fxRates.HKD, _src: fxRates._src });
+
+    for (const cand of buildCandidates(h0)) {
+        if (finnhubKey) {
+            const f = await fetchFinnhubPrices([cand]).catch(() => null);
+            console.log(`  Finnhub  ${cand}:`, f?.[cand] || '✗ ไม่มีข้อมูล');
+        }
+        const y = await fetchYahooSingle(cand).catch(() => null);
+        console.log(`  Yahoo    ${cand}:`, y || '✗ ไม่มีข้อมูล');
+        const st = await fetchStooqBatch([cand]).catch(() => null);
+        console.log(`  Stooq    ${cand}:`, st?.[cand] || '✗ ไม่มีข้อมูล');
+    }
+    console.log('── จบ ──');
+};
+
+// On-screen version of debugPrice() — Settings → ตรวจสอบราคาหุ้น
+async function runPriceDiagnostic() {
+    const inp = document.getElementById('diagSymbolInput');
+    const out = document.getElementById('diagResult');
+    const s   = (inp?.value || '').toUpperCase().trim();
+    if (!s) { alert('กรุณาใส่ ticker ก่อน'); return; }
+    out.style.display = 'block';
+    out.textContent = '⏳ กำลังตรวจสอบ ' + s + ' …';
+
+    const L = [];
+    const hs = S.holdings.filter(h => (h.symbol || '').toUpperCase() === s);
+    if (!hs.length) { out.textContent = `ไม่พบ "${s}" ในสินทรัพย์`; return; }
+
+    let blockedReason = null;
+    hs.forEach((h, i) => {
+        const port = S.portfolios.find(p => p.id === h.portfolioId);
+        L.push(`📦 ${port?.name || '—'}`);
+        L.push(`   ตลาดที่ตั้งไว้: ${h.exchange || 'AUTO'}`);
+        L.push(`   สกุลเงิน: ${h.currency || 'AUTO'}`);
+        L.push(`   ราคาที่เก็บไว้: ${h.currentPrice ?? '—'}`);
+        L.push(`   symbol ที่เคยดึงสำเร็จ: ${h.resolvedSymbol || '—'}`);
+        L.push(`   ดึงสำเร็จล่าสุด: ${h.lastFetch ? new Date(h.lastFetch).toLocaleString('th-TH') : 'ไม่เคย'}`);
+        if (h.manualPrice) { L.push(`   ⛔ ตั้งราคาเอง (manual) = ${h.manualPrice}`); blockedReason = 'manual'; }
+        if (h.exchange === 'MANUAL') { L.push(`   ⛔ ตลาด = กรอกราคาเอง`); blockedReason = 'manual'; }
+        L.push('');
+    });
+
+    if (blockedReason === 'manual') {
+        L.push('❗ สาเหตุ: หุ้นนี้ถูกตั้งราคาเองไว้ ระบบจึงไม่ดึงราคาใหม่');
+        L.push('   วิธีแก้: กดปุ่ม ✏️ ที่แถวหุ้นนี้ แล้วลบตัวเลขให้ว่าง → กลับไปดึงอัตโนมัติ');
+        out.textContent = L.join('\n');
+        return;
+    }
+
+    const cands = buildCandidates(hs[0]);
+    L.push(`🔎 จะลองหาจาก: ${cands.join(', ')}`);
+    L.push('');
+    out.textContent = L.join('\n');
+
+    for (const c of cands) {
+        L.push(`▸ ${c}`);
+        if (finnhubKey) {
+            if (c.endsWith('.BK')) {
+                L.push('   Finnhub: ข้าม (ไม่รองรับหุ้นไทยในแพลนฟรี)');
+            } else {
+                const f = await fetchFinnhubPrices([c]).catch(() => null);
+                L.push('   Finnhub: ' + (f?.[c] ? `✅ ${f[c].price} ${f[c].currency}` : '✗ ไม่มีข้อมูล'));
+            }
+        } else {
+            L.push('   Finnhub: ไม่มี API key');
+        }
+        const y = await fetchYahooSingle(c).catch(() => null);
+        L.push('   Yahoo:   ' + (y?.price ? `✅ ${y.price} ${y.currency}` : '✗ ไม่มีข้อมูล'));
+        const st = await fetchStooqBatch([c]).catch(() => null);
+        L.push('   Stooq:   ' + (st?.[c]?.price ? `✅ ${st[c].price} ${st[c].currency}` : '✗ ไม่มีข้อมูล'));
+        L.push('');
+        out.textContent = L.join('\n');
+    }
+
+    // ── Per-proxy check ──────────────────────────────────────────────────────
+    // Thai stocks can ONLY come from Yahoo, and Yahoo is only reachable through a
+    // CORS proxy. If every proxy is throttled the price is unfetchable — this shows
+    // which routes are actually alive right now.
+    {
+        const probe = (h0v => `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(h0v)}?interval=1d&range=1d`)(cands[0]);
+        L.push('━━ สถานะ proxy (เส้นทางไป Yahoo) ━━');
+        out.textContent = L.join('\n');
+        const direct = await _fetch(probe, 4000).catch(() => null);
+        L.push('  direct (ไม่ผ่าน proxy): ' + (direct?.chart?.result ? '✅ ใช้ได้' : '✗'));
+        out.textContent = L.join('\n');
+        for (const def of PROXY_DEFS) {
+            const host = (def.build('https://x').match(/^https?:\/\/([^/?]+)/) || [])[1] || '?';
+            const d = await _fetchViaProxy(def, probe, 7000).catch(() => null);
+            L.push(`  ${host}: ` + (d?.chart?.result ? '✅ ใช้ได้' : '✗'));
+            out.textContent = L.join('\n');
+        }
+        L.push('');
+    }
+
+    // ── Simulate the REAL refresh pipeline for this one symbol ───────────────
+    // The buttons above use fetchYahooSingle, but the refresh uses a different
+    // path (symFor → Finnhub → fetchYahooBatch → applyPrice). Replaying it here
+    // shows exactly which stage drops the price.
+    L.push('━━ จำลองเส้นทางของปุ่ม "อัปเดตราคา" ━━');
+    const h0 = hs[0];
+    const ex = EXCHANGE_MAP[h0.exchange];
+    let wanted;
+    if (h0.exchange && h0.exchange !== 'AUTO' && h0.exchange !== 'MANUAL' && ex) {
+        wanted = h0.symbol.toUpperCase() + (ex.suffix || '');
+    } else if (h0.resolvedSymbol && !isCrossListedSymbol(h0.resolvedSymbol)) {
+        wanted = h0.resolvedSymbol;
+    } else {
+        wanted = (h0.symbol || '').toUpperCase();
+    }
+    L.push(`1) symbol ที่ระบบจะใช้: ${wanted}`);
+    out.textContent = L.join('\n');
+
+    const fh = finnhubKey ? await fetchFinnhubPrices([wanted]).catch(e => ({ _err: e })) : null;
+    L.push('2) Finnhub: ' + (fh?.[wanted]?.price ? `✅ ${fh[wanted].price}` : '✗ ไม่ได้'));
+    out.textContent = L.join('\n');
+
+    let batch = null, batchErr = null;
+    try { batch = await fetchYahooBatch([wanted]); }
+    catch(e) { batchErr = e?.message || String(e); }
+    L.push('3) fetchYahooBatch: ' + (batchErr ? `💥 error: ${batchErr}`
+        : batch?.[wanted]?.price ? `✅ ${batch[wanted].price} ${batch[wanted].currency}` : '✗ ไม่ได้'));
+    out.textContent = L.join('\n');
+
+    const got = fh?.[wanted] || batch?.[wanted];
+    if (!got?.price) {
+        L.push('4) ผล: ไม่มีราคาเข้ามา → ระบบคงราคาเดิมไว้');
+    } else if (isCrossListedSymbol(wanted)) {
+        L.push(`4) ⛔ ถูกปฏิเสธ: ${wanted} อยู่ในบัญชีตลาด cross-listing`);
+    } else if (h0.manualPrice || h0.exchange === 'MANUAL') {
+        L.push('4) ⛔ ถูกปฏิเสธ: ตั้งราคาเองไว้');
+    } else {
+        L.push(`4) ✅ ควรบันทึกได้: ${got.price} ${got.currency || ''}`);
+        L.push('   ถ้าราคายังไม่เปลี่ยนหลังกดอัปเดต แปลว่ามีอย่างอื่นเขียนทับทีหลัง');
+    }
+    L.push('');
+
+    // ── Actually write the price, then re-check that it survives ─────────────
+    // Distinguishes "the fetch failed" from "something overwrites it afterwards".
+    if (got?.price && !h0.manualPrice && h0.exchange !== 'MANUAL') {
+        const before = h0.currentPrice;
+        const idx = S.holdings.findIndex(x => x.id === h0.id);
+        if (idx >= 0) {
+            S.holdings[idx].currentPrice   = got.price;
+            S.holdings[idx].resolvedSymbol = wanted;
+            S.holdings[idx].lastFetch      = new Date().toISOString();
+            delete S.holdings[idx]._stale;
+            save();
+            renderAll();
+            L.push('');
+            L.push(`5) เขียนราคาลงไปแล้ว: ${before} → ${got.price}`);
+            L.push('   กำลังรอ 8 วินาที เพื่อดูว่ามีอะไรมาทับหรือไม่…');
+            out.textContent = L.join('\n');
+
+            await new Promise(r => setTimeout(r, 8000));
+            const after = S.holdings.find(x => x.id === h0.id)?.currentPrice;
+            L.pop();
+            if (after === got.price) {
+                L.push(`   ✅ ผ่าน 8 วิแล้วราคายังเป็น ${after} — ไม่มีอะไรมาทับ`);
+            } else {
+                L.push(`   ⛔ ราคาถูกเปลี่ยนเป็น ${after} ภายใน 8 วินาที`);
+                L.push('      → มีการ sync จาก cloud มาทับ (ไม่ใช่ปัญหาการดึงราคา)');
+            }
+            out.textContent = L.join('\n');
+        }
+    }
+    L.push('');
+
+    const anyOk = L.some(x => x.includes('✅'));
+    L.push(anyOk
+        ? '✅ มีแหล่งที่ดึงได้ — กด "อัปเดตราคา" อีกครั้งน่าจะได้ราคาใหม่'
+        : '❌ ไม่มีแหล่งไหนดึงได้เลย (อาจเป็นปัญหา internet หรือ ticker ไม่ถูกต้อง)');
+    out.textContent = L.join('\n');
+}
+
 async function fetchFinnhubPrices(yahooSymbols) {
     if (!finnhubKey || !yahooSymbols.length) return {};
     // Map Yahoo symbols to Finnhub symbols (mostly same, HK needs exchange suffix)
@@ -7214,7 +7552,7 @@ async function fetchYahooBatch(symbols) {
         try {
             return await Promise.any([
                 ...urls.map(url => async () => { const d = await _fetch(url, 5000); const r = d ? parse(d) : null; if (!r || !Object.keys(r).length) throw new Error('empty'); return r; }),
-                ...PROXIES.flatMap(fn => urls.map(url => async () => { const d = await _fetch(fn(url), 7000); const r = d ? parse(d) : null; if (!r || !Object.keys(r).length) throw new Error('empty'); return r; })),
+                ..._orderedProxies().flatMap(def => urls.map(url => async () => { const d = await _fetchViaProxy(def, url, 7000); const r = d ? parse(d) : null; if (!r || !Object.keys(r).length) throw new Error('empty'); _rememberProxy(def); return r; })),
             ].map(fn => fn()));
         } catch { return {}; }
     };
@@ -7231,7 +7569,29 @@ async function fetchYahooBatch(symbols) {
         fetchGroup(hkSyms,    'zh-Hant-HK', 'HK'),
     ]);
 
-    return { ...usResult, ...thResult, ...hkResult };
+    const merged = { ...usResult, ...thResult, ...hkResult };
+
+    // The batch above only uses Yahoo's v7 /finance/quote endpoint, which Yahoo now
+    // blocks aggressively (it wants a crumb/cookie). fetchYahooSingle also tries the
+    // v8 chart and v10 quoteSummary endpoints, which still answer — that's why a
+    // Thai stock like LTMH.BK resolves when tested alone but is missed by the batch.
+    // Retry anything the batch dropped, one symbol at a time, in small waves.
+    const missed = unique.filter(s => !merged[s]);
+    if (missed.length) {
+        const WAVE = 6;   // keep proxy load reasonable
+        for (let i = 0; i < missed.length; i += WAVE) {
+            const wave = missed.slice(i, i + WAVE);
+            const results = await Promise.all(
+                wave.map(sym => fetchYahooSingle(sym).catch(() => null))
+            );
+            wave.forEach((sym, j) => {
+                const r = results[j];
+                if (r?.price) merged[sym] = { price: r.price, currency: r.currency || 'USD' };
+            });
+        }
+    }
+
+    return merged;
 }
 
 // ═══════════════════════════════════════

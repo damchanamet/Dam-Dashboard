@@ -1179,6 +1179,60 @@ body {
     <div id="cokeOptionsList"></div>
 </div>
 
+<!-- ══ PAGE: PORT BOY (MANAGED) ══ -->
+<div id="pageBoy" class="page">
+    <!-- Hero card -->
+    <div class="total-card" style="border-top:3px solid #06b6d4">
+        <div class="tc-label" style="color:#06b6d4">👦 Port Boy <span style="font-size:11px;font-weight:400;color:var(--text-muted)">&nbsp;·&nbsp; รับจ้างบริหาร · Performance Fee 15%</span></div>
+        <div class="tc-amount loading" id="boyTotalBig">฿ —</div>
+        <div class="net-row">
+            <div class="net-item"><div class="net-item-label">สินทรัพย์</div><div class="net-item-val" id="boyAssets" style="color:var(--green)">—</div></div>
+            <div class="net-divider"></div>
+            <div class="net-item"><div class="net-item-label">หนี้/Margin</div><div class="net-item-val" id="boyLiab" style="color:var(--red)">—</div></div>
+        </div>
+        <div class="tc-sub" id="boySub" style="margin-top:6px"></div>
+        <!-- Watermark tracker -->
+        <div id="boyWatermarkSection" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
+    </div>
+
+    <div class="currency-grid" id="boyCurrencyGrid"></div>
+
+    <!-- Alloc chart -->
+    <div class="card" id="boyChartCard" style="display:none">
+        <div class="card-title">สัดส่วนสินทรัพย์</div>
+        <div class="chart-wrap">
+            <canvas id="boyAllocChart" width="190" height="190" style="max-width:190px;max-height:190px"></canvas>
+            <div class="chart-center">
+                <div class="chart-center-label">รวม (USD)</div>
+                <div class="chart-center-val" id="boyChartVal">—</div>
+                <div class="chart-center-cur" id="boyChartCur"></div>
+            </div>
+        </div>
+        <div id="boyChartLegend" style="margin-top:12px"></div>
+    </div>
+
+    <!-- Stocks / Holdings -->
+    <div class="page-header" style="padding-top:8px">
+        <h2>📈 หุ้น / สินทรัพย์</h2>
+        <button class="btn-add" onclick="openAddExtHolding('boy')">+ เพิ่ม</button>
+    </div>
+    <div id="boyHoldingsList"></div>
+
+    <!-- Liabilities / Margin -->
+    <div class="section-header">
+        <h3>🔴 Margin / หนี้</h3>
+        <button class="btn-add" style="background:var(--red)" onclick="openAddExtLiability('boy')">+ เพิ่มหนี้</button>
+    </div>
+    <div id="boyLiabilitiesList"></div>
+
+    <!-- Options section -->
+    <div class="page-header" style="padding-top:4px">
+        <h2>⚙️ Options</h2>
+        <button class="btn-add" onclick="openAddOption('boy')" style="background:#7c3aed">+ เพิ่ม Option</button>
+    </div>
+    <div id="boyOptionsList"></div>
+</div>
+
 <!-- ══ PAGE: PORT KHUN GOOD ══ -->
 <div id="pageGood" class="page">
     <!-- Hero card -->
@@ -1393,6 +1447,9 @@ body {
     </div>
     <div class="nav-item" onclick="showPage('coke',this)">
         <span class="nav-icon">🥤</span><span class="nav-label">Coke</span>
+    </div>
+    <div class="nav-item" onclick="showPage('boy',this)">
+        <span class="nav-icon">👦</span><span class="nav-label">Boy</span>
     </div>
     <div class="nav-item" onclick="showPage('dike',this)">
         <span class="nav-icon">🏦</span><span class="nav-label">Dike</span>
@@ -2453,7 +2510,7 @@ function showPage(name, el) {
 //  POST-IT NOTES (per page, synced via S.notes)
 // ═══════════════════════════════════════
 const PAGE_TITLES = {
-    summary:'Summary', holdings:'Asset', good:'Port Khun Good', coke:'Port Coke',
+    summary:'Summary', holdings:'Asset', good:'Port Khun Good', coke:'Port Coke', boy:'Port Boy',
     dike:'Port Dike', dew:'Port Dew', big:'Port Big', hsbc:'HSBC',
     vc:'VC', adjust:'Adjust', history:'ประวัติ', settings:'ตั้งค่า'
 };
@@ -3227,6 +3284,7 @@ const EXT_PORTS = {
     dew:  { name: 'Port Dew',  color: '#10b981', myShare: 0,  icon: '🌿' },
     big:  { name: 'Port Big',  color: '#3b82f6', myShare: 0,  icon: '💼' },
     coke: { name: 'Port Coke', color: '#f43f5e', myShare: 0,  icon: '🥤', isManaged: true, feeRate: 15 },
+    boy:  { name: 'Port Boy',  color: '#06b6d4', myShare: 0,  icon: '👦', isManaged: true, feeRate: 15 },
     good: { name: 'Port Khun Good', color: '#8b5cf6', myShare: 0, icon: '💼', isManaged: true, feeRate: 15, hasAccDec: true, hasFCN: true },
     hsbc: { name: 'HSBC', color: '#db2777', myShare: 0, icon: '🏦', hasDec: true, hasFCN: true, includeInTotal: true },
 };
